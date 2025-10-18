@@ -1,5 +1,5 @@
 # VAV - Vision-Audio-Visual System
-**Version: VAV_20251018**
+**Version: VAV_20251018_v2 (with Region Rendering)**
 
 Real-time visual-audio-visual feedback system for Eurorack modular synthesis.
 
@@ -40,6 +40,11 @@ python3 main_compact.py
   - Per-channel intensity, angle, curve controls
   - 4 blend modes: Add, Screen, Difference, Color Dodge
   - Numba JIT compilation for real-time 1920x1080@30-60fps
+- **Region Rendering** ⭐ NEW: Content-aware dispersed region mapping
+  - Each channel renders in different screen regions based on camera input
+  - 4 region modes: Brightness, Color, Quadrant, Edge detection
+  - Real-time dynamic mapping (3-5ms overhead)
+  - Perfect for interactive light/hand-based performances
 - **Scope Widget**: Real-time waveform display (30fps)
 - **Camera Overlay**: Blended camera input with visual effects
 
@@ -49,6 +54,7 @@ python3 main_compact.py
   - 4-channel Multiverse sliders (Intensity, Angle, Curve)
   - Global brightness and blend mode
   - Camera mix control
+  - Region rendering toggle and mode selector ⭐ NEW
   - Ellen Ripley effect parameters
 - **Device Management**: Hot-swappable audio/video device selection
 
@@ -84,6 +90,8 @@ vav/
 │   └── signal.py                # Signal utilities
 ├── visual/
 │   ├── numba_renderer.py        # Multiverse renderer (Numba JIT)
+│   ├── content_aware_regions.py # Content-aware region mapping ⭐ NEW
+│   ├── region_mapper.py         # Static region patterns ⭐ NEW
 │   ├── gpu_renderer.py          # GPU fallback renderer
 │   └── qt_opengl_renderer.py    # Qt OpenGL renderer
 ├── gui/
@@ -118,9 +126,17 @@ main_compact.py                  # Application entry point
 - AVCaptureDeviceTypeExternal deprecation warning (macOS Continuity Camera)
 - First frame may take longer (Numba JIT compilation warmup)
 
-## Recent Updates (2025-10-18)
+## Recent Updates
 
-### Multiverse Integration
+### 2025-10-18 v2: Region Rendering ⭐ NEW
+- ✓ Added content-aware region rendering system
+- ✓ 4 region modes: Brightness (recommended), Color, Quadrant, Edge
+- ✓ Brightness mode: Dark→CH1, Medium Dark→CH2, Medium Bright→CH3, Bright→CH4
+- ✓ Numba JIT optimized region blending (3-5ms overhead)
+- ✓ GUI controls: Region Map checkbox + Region Mode dropdown
+- ✓ Perfect for interactive performances with hand/light control
+
+### 2025-10-18 v1: Multiverse Integration
 - ✓ Fixed curve implementation (Y-axis bending effect)
 - ✓ Fixed color mapping (frequency-only, not waveform-dependent)
 - ✓ Fixed angle rotation (reverse mapping)
@@ -131,6 +147,10 @@ main_compact.py                  # Application entry point
 - ✓ Removed 21 unused files (tests, old renderers, old GUI)
 - ✓ Fixed import dependencies
 - ✓ Verified all core modules load successfully
+
+## Documentation
+
+- **[REGION_RENDERING_GUIDE.md](REGION_RENDERING_GUIDE.md)**: Complete guide for region rendering feature
 
 ## License
 
