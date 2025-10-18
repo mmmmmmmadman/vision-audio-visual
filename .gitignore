@@ -28,3 +28,4 @@ build/
 *.log
 .cache/
 config.json
+backups/
