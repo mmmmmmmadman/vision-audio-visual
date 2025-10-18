@@ -292,6 +292,23 @@ class CompactMainWindow(QMainWindow):
         grid.addWidget(self.camera_mix_label, row3, COL3 + 2)
         row3 += 1
 
+        # Region Rendering
+        self.region_rendering_checkbox = QCheckBox("Region Map")
+        self.region_rendering_checkbox.setChecked(False)
+        self.region_rendering_checkbox.stateChanged.connect(self._on_region_rendering_toggle)
+        grid.addWidget(self.region_rendering_checkbox, row3, COL3, 1, 2)
+        row3 += 1
+
+        # Region Mode
+        grid.addWidget(QLabel("Region Mode"), row3, COL3)
+        self.region_mode_combo = QComboBox()
+        self.region_mode_combo.addItems(["Bright", "Color", "Quad", "Edge"])
+        self.region_mode_combo.setFixedHeight(20)
+        self.region_mode_combo.setFixedWidth(120)
+        self.region_mode_combo.currentIndexChanged.connect(self._on_region_mode_changed)
+        grid.addWidget(self.region_mode_combo, row3, COL3 + 1, 1, 2)
+        row3 += 1
+
         # Ch1-2 controls
         self.channel_curve_sliders = []
         self.channel_angle_sliders = []
@@ -1031,6 +1048,21 @@ class CompactMainWindow(QMainWindow):
         brightness = value / 100.0
         self.brightness_label.setText(f"{brightness:.1f}")
         self.controller.set_renderer_brightness(brightness)
+
+    def _on_region_rendering_toggle(self, state: int):
+        """Toggle region-based rendering"""
+        enabled = state == Qt.CheckState.Checked.value
+        self.controller.enable_region_rendering(enabled)
+        status = "Region ON" if enabled else "Region OFF"
+        self.status_label.setText(status)
+
+    def _on_region_mode_changed(self, index: int):
+        """Change region rendering mode"""
+        modes = ['brightness', 'color', 'quadrant', 'edge']
+        mode = modes[index]
+        self.controller.set_region_mode(mode)
+        mode_names = ['Brightness', 'Color', 'Quadrant', 'Edge']
+        self.status_label.setText(f"Region: {mode_names[index]}")
 
     def _on_channel_curve_changed(self, channel: int, value: int):
         """Channel curve changed"""

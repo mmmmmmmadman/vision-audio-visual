@@ -19,6 +19,7 @@ from ..audio.effects.ellen_ripley import EllenRipleyEffectChain
 from ..audio.analysis import AudioAnalyzer
 from ..visual.gpu_renderer import GPUMultiverseRenderer
 from ..visual.qt_opengl_renderer import QtMultiverseRenderer
+from ..visual.content_aware_regions import ContentAwareRegionMapper
 
 # Try Numba JIT renderer (best performance on macOS)
 try:
@@ -72,6 +73,11 @@ class VAVController:
             'channel_intensities': [1.0, 1.0, 1.0, 1.0],  # Intensity for 4 channels
             'camera_mix': 0.0,  # 0.0=pure multiverse, 1.0=pure camera, blend in between
         }
+
+        # Region-based rendering
+        self.use_region_rendering = False  # Enable/disable region-based rendering
+        self.region_mapper: Optional[ContentAwareRegionMapper] = None
+        self.region_mode = 'brightness'  # 'brightness', 'color', 'quadrant', 'edge'
 
         # Audio buffers for Multiverse rendering (circular buffers)
         self.audio_buffer_size = 4800  # ~100ms at 48kHz
@@ -242,6 +248,12 @@ class VAVController:
 
         # Initialize Ellen Ripley effect chain
         self.ellen_ripley = EllenRipleyEffectChain(sample_rate=self.sample_rate)
+
+        # Initialize region mapper
+        self.region_mapper = ContentAwareRegionMapper(
+            width=self.camera.width,
+            height=self.camera.height
+        )
 
         print("VAV system initialized")
         return True
@@ -485,8 +497,24 @@ class VAVController:
             else:
                 channels_data.append({'enabled': False})
 
-        # Render using GPU Multiverse engine (full resolution)
-        rendered_rgb = self.renderer.render(channels_data)
+        # Generate region map if region rendering is enabled (only for Numba renderer)
+        region_map = None
+        if self.use_region_rendering and self.region_mapper and NUMBA_AVAILABLE and isinstance(self.renderer, NumbaMultiverseRenderer):
+            if self.region_mode == 'brightness':
+                region_map = self.region_mapper.create_brightness_based_regions(frame)
+            elif self.region_mode == 'color':
+                region_map = self.region_mapper.create_color_based_regions(frame)
+            elif self.region_mode == 'quadrant':
+                region_map = self.region_mapper.create_quadrant_regions(frame)
+            elif self.region_mode == 'edge':
+                region_map = self.region_mapper.create_edge_based_regions(frame)
+
+        # Render using Multiverse engine
+        # Only Numba renderer supports region_map parameter
+        if region_map is not None and NUMBA_AVAILABLE and isinstance(self.renderer, NumbaMultiverseRenderer):
+            rendered_rgb = self.renderer.render(channels_data, region_map=region_map)
+        else:
+            rendered_rgb = self.renderer.render(channels_data)
 
         # Convert RGB to BGR for OpenCV
         rendered_bgr = cv2.cvtColor(rendered_rgb, cv2.COLOR_RGB2BGR)
@@ -881,3 +909,18 @@ class VAVController:
         """Set Ellen Ripley chaos parameters"""
         if self.ellen_ripley:
             self.ellen_ripley.set_chaos_params(rate, amount, shape)
+
+    # Region-based rendering controls
+    def enable_region_rendering(self, enabled: bool):
+        """Enable/disable region-based rendering"""
+        self.use_region_rendering = enabled
+        status = "enabled" if enabled else "disabled"
+        print(f"Region-based rendering {status}")
+
+    def set_region_mode(self, mode: str):
+        """Set region rendering mode ('brightness', 'color', 'quadrant', 'edge')"""
+        if mode in ['brightness', 'color', 'quadrant', 'edge']:
+            self.region_mode = mode
+            print(f"Region mode set to: {mode}")
+        else:
+            print(f"Invalid region mode: {mode}. Valid modes: brightness, color, quadrant, edge")

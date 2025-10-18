@@ -223,6 +223,58 @@ def blend_color_dodge(buffer: np.ndarray, layer: np.ndarray):
 
 
 @njit(parallel=True, fastmath=True, cache=True)
+def blend_add_region(buffer: np.ndarray, layer: np.ndarray, region_map: np.ndarray, channel: int):
+    """加法混合 - 限定區域 - Numba JIT 並行化"""
+    height, width = buffer.shape[:2]
+    for y in prange(height):
+        for x in range(width):
+            if region_map[y, x] == channel:
+                for c in range(4):
+                    buffer[y, x, c] = min(1.0, buffer[y, x, c] + layer[y, x, c])
+
+
+@njit(parallel=True, fastmath=True, cache=True)
+def blend_screen_region(buffer: np.ndarray, layer: np.ndarray, region_map: np.ndarray, channel: int):
+    """濾色混合 - 限定區域 - Numba JIT 並行化"""
+    height, width = buffer.shape[:2]
+    for y in prange(height):
+        for x in range(width):
+            if region_map[y, x] == channel:
+                for c in range(4):
+                    buffer[y, x, c] = 1.0 - (1.0 - buffer[y, x, c]) * (1.0 - layer[y, x, c])
+
+
+@njit(parallel=True, fastmath=True, cache=True)
+def blend_difference_region(buffer: np.ndarray, layer: np.ndarray, region_map: np.ndarray, channel: int):
+    """差異混合 - 限定區域 - Numba JIT 並行化"""
+    height, width = buffer.shape[:2]
+    for y in prange(height):
+        for x in range(width):
+            if region_map[y, x] == channel:
+                for c in range(3):  # RGB
+                    buffer[y, x, c] = abs(buffer[y, x, c] - layer[y, x, c])
+                # Alpha: max
+                buffer[y, x, 3] = max(buffer[y, x, 3], layer[y, x, 3])
+
+
+@njit(parallel=True, fastmath=True, cache=True)
+def blend_color_dodge_region(buffer: np.ndarray, layer: np.ndarray, region_map: np.ndarray, channel: int):
+    """顏色加深 - 限定區域 - Numba JIT 並行化"""
+    height, width = buffer.shape[:2]
+    for y in prange(height):
+        for x in range(width):
+            if region_map[y, x] == channel:
+                for c in range(3):  # RGB
+                    if layer[y, x, c] < 0.999:
+                        result = buffer[y, x, c] / max(0.001, 1.0 - layer[y, x, c])
+                        buffer[y, x, c] = min(1.0, result)
+                    else:
+                        buffer[y, x, c] = 1.0
+                # Alpha: max
+                buffer[y, x, 3] = max(buffer[y, x, 3], layer[y, x, 3])
+
+
+@njit(parallel=True, fastmath=True, cache=True)
 def apply_brightness_and_convert(buffer: np.ndarray, brightness: float) -> np.ndarray:
     """應用亮度並轉換為 uint8 RGB - Numba JIT 並行化"""
     height, width = buffer.shape[:2]
@@ -268,7 +320,7 @@ class NumbaMultiverseRenderer:
         _ = rotate_image(dummy_layer, 45.0)
         print(f"Numba Multiverse renderer initialized: {width}x{height}")
 
-    def render(self, channels_data: List[dict]) -> np.ndarray:
+    def render(self, channels_data: List[dict], region_map: np.ndarray = None) -> np.ndarray:
         """
         渲染所有通道並混合
 
@@ -279,6 +331,8 @@ class NumbaMultiverseRenderer:
                 - 'intensity': 強度 (0-1.5)
                 - 'angle': 旋轉角度 (度，-180 到 +180)
                 - 'enabled': 是否啟用 (bool)
+            region_map: 可選的區域映射 (height, width)，值為通道編號 (0-3)
+                       如果提供，則每個通道只在對應區域渲染
 
         Returns:
             渲染結果 RGB 圖像 (height, width, 3), uint8
@@ -312,14 +366,27 @@ class NumbaMultiverseRenderer:
                 channel_layer = rotate_image(channel_layer, angle)
 
             # 混合（JIT 編譯）
-            if self.blend_mode == 0:
-                blend_add(self.buffer, channel_layer)
-            elif self.blend_mode == 1:
-                blend_screen(self.buffer, channel_layer)
-            elif self.blend_mode == 2:
-                blend_difference(self.buffer, channel_layer)
-            elif self.blend_mode == 3:
-                blend_color_dodge(self.buffer, channel_layer)
+            # 如果有 region_map，使用區域混合；否則使用全畫面混合
+            if region_map is not None:
+                # 區域混合
+                if self.blend_mode == 0:
+                    blend_add_region(self.buffer, channel_layer, region_map, idx)
+                elif self.blend_mode == 1:
+                    blend_screen_region(self.buffer, channel_layer, region_map, idx)
+                elif self.blend_mode == 2:
+                    blend_difference_region(self.buffer, channel_layer, region_map, idx)
+                elif self.blend_mode == 3:
+                    blend_color_dodge_region(self.buffer, channel_layer, region_map, idx)
+            else:
+                # 全畫面混合
+                if self.blend_mode == 0:
+                    blend_add(self.buffer, channel_layer)
+                elif self.blend_mode == 1:
+                    blend_screen(self.buffer, channel_layer)
+                elif self.blend_mode == 2:
+                    blend_difference(self.buffer, channel_layer)
+                elif self.blend_mode == 3:
+                    blend_color_dodge(self.buffer, channel_layer)
 
         # 應用亮度並轉換為 uint8（JIT 編譯）
         rgb = apply_brightness_and_convert(self.buffer, self.brightness)
