@@ -546,11 +546,8 @@ class VAVController:
             # Convert back to uint8
             rendered_bgr = (result * 255.0).astype(np.uint8)
 
-        # Overlay cable detection lines (讓使用者看到偵測結果)
-        for cable in cables[:4]:  # Only first 4 cables
-            cv2.line(rendered_bgr, cable.start, cable.end, (255, 255, 255), 2)
-            cv2.circle(rendered_bgr, cable.start, 4, (255, 255, 255), -1)
-            cv2.circle(rendered_bgr, cable.end, 4, (255, 255, 255), -1)
+        # Contours overlay is already done by ContourCVGenerator.draw_overlay()
+        # No need to overlay again here
 
         # Add info text
         height, width = rendered_bgr.shape[:2]
