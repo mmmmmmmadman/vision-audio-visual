@@ -397,10 +397,9 @@ class CompactMainWindow(QMainWindow):
         row3 = 0
         self.channel_curve_sliders = []
         self.channel_angle_sliders = []
-        self.channel_intensity_sliders = []
         default_angles = [180, 225, 270, 315]
 
-        # Create all 4 channels with vertical layout (Curve, Angle, Intensity in separate rows)
+        # Create all 4 channels with vertical layout (Curve, Angle in separate rows)
         for i in range(4):
             # Curve
             grid.addWidget(QLabel(f"Ch{i+1} Curve"), row3, COL3)
@@ -432,22 +431,6 @@ class CompactMainWindow(QMainWindow):
             angle_label.setFixedWidth(30)
             grid.addWidget(angle_label, row3, COL3 + 2)
             self.channel_angle_sliders.append((angle_slider, angle_label))
-            row3 += 1
-
-            # Intensity
-            grid.addWidget(QLabel(f"Ch{i+1} Intensity"), row3, COL3)
-            intensity_slider = QSlider(Qt.Orientation.Horizontal)
-            intensity_slider.setFixedHeight(16)
-            intensity_slider.setFixedWidth(120)
-            intensity_slider.setMinimum(0)
-            intensity_slider.setMaximum(150)
-            intensity_slider.setValue(100)
-            intensity_slider.valueChanged.connect(lambda val, idx=i: self._on_channel_intensity_changed(idx, val))
-            grid.addWidget(intensity_slider, row3, COL3 + 1)
-            intensity_label = QLabel("1.0")
-            intensity_label.setFixedWidth(25)
-            grid.addWidget(intensity_label, row3, COL3 + 2)
-            self.channel_intensity_sliders.append((intensity_slider, intensity_label))
             row3 += 1
 
         # ===== COLUMN 4: Ellen Ripley Delay+Grain =====
@@ -1076,7 +1059,13 @@ class CompactMainWindow(QMainWindow):
         label.setText(str(value))
 
     def _on_mixer_volume(self, track: int, value: float):
-        self.controller.set_mixer_params(track, volume=value)
+        """Track volume changed - affects BOTH Multiverse intensity and Ellen Ripley mix level"""
+        # Set Multiverse visual intensity
+        if self.controller:
+            self.controller.set_renderer_channel_intensity(track, value)
+            # Set Ellen Ripley mix level
+            self.controller.set_channel_level(track, value)
+        # Update label
         _, label = self.mixer_sliders[track]
         label.setText(f"{value:.1f}")
 
@@ -1249,13 +1238,6 @@ class CompactMainWindow(QMainWindow):
         # Map 0-360 to -180 to +180 (like original Multiverse)
         mapped_angle = float(value) - 180.0
         self.controller.set_renderer_channel_angle(channel, mapped_angle)
-
-    def _on_channel_intensity_changed(self, channel: int, value: int):
-        """Channel intensity changed"""
-        intensity = value / 100.0
-        _, label = self.channel_intensity_sliders[channel]
-        label.setText(f"{intensity:.1f}")
-        self.controller.set_renderer_channel_intensity(channel, intensity)
 
     def _on_camera_mix_changed(self, value: int):
         """Camera mix changed"""

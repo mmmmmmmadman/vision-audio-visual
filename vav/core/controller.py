@@ -78,6 +78,9 @@ class VAVController:
         self.region_mapper: Optional[ContentAwareRegionMapper] = None
         self.region_mode = 'brightness'  # 'brightness', 'color', 'quadrant', 'edge'
 
+        # Channel levels for audio mixing (before Ellen Ripley)
+        self.channel_levels = [1.0, 1.0, 1.0, 1.0]  # 4 channel levels (0.0-1.0)
+
         # Audio buffers for Multiverse rendering (circular buffers)
         self.audio_buffer_size = 4800  # ~100ms at 48kHz
         self.audio_buffers = [np.zeros(self.audio_buffer_size, dtype=np.float32) for _ in range(4)]
@@ -158,36 +161,21 @@ class VAVController:
             except Exception as e:
                 print(f"⚠ Numba renderer failed: {e}")
 
-        # Try GPU renderers if Numba not available
-        if not renderer_initialized:
-            if is_macos:
-                # Qt OpenGL on macOS
-                try:
-                    self.renderer = QtMultiverseRenderer(
-                        width=self.camera.width,
-                        height=self.camera.height
-                    )
-                    self.renderer.set_blend_mode(self.renderer_params['blend_mode'])
-                    self.renderer.set_brightness(self.renderer_params['brightness'])
-                    print(f"✓ Qt OpenGL Multiverse renderer: {self.camera.width}x{self.camera.height}")
-                    self.using_gpu = True
-                    renderer_initialized = True
-                except Exception as e:
-                    print(f"⚠ Qt OpenGL renderer failed: {e}")
-            else:
-                # ModernGL on Linux/Windows
-                try:
-                    self.renderer = GPUMultiverseRenderer(
-                        width=self.camera.width,
-                        height=self.camera.height
-                    )
-                    self.renderer.set_blend_mode(self.renderer_params['blend_mode'])
-                    self.renderer.set_brightness(self.renderer_params['brightness'])
-                    print(f"✓ ModernGL Multiverse renderer: {self.camera.width}x{self.camera.height}")
-                    self.using_gpu = True
-                    renderer_initialized = True
-                except Exception as e:
-                    print(f"⚠ ModernGL renderer failed: {e}")
+        # Try GPU renderers on other platforms
+        if not renderer_initialized and not is_macos:
+            # ModernGL on Linux/Windows
+            try:
+                self.renderer = GPUMultiverseRenderer(
+                    width=self.camera.width,
+                    height=self.camera.height
+                )
+                self.renderer.set_blend_mode(self.renderer_params['blend_mode'])
+                self.renderer.set_brightness(self.renderer_params['brightness'])
+                print(f"✓ ModernGL Multiverse renderer: {self.camera.width}x{self.camera.height}")
+                self.using_gpu = True
+                renderer_initialized = True
+            except Exception as e:
+                print(f"⚠ ModernGL renderer failed: {e}")
 
         # Final fallback: Pure NumPy CPU renderer
         if not renderer_initialized:
@@ -566,9 +554,7 @@ class VAVController:
             renderer_type = "GPU"
         else:
             renderer_type = "CPU"
-        cv2.putText(rendered_bgr, f"Multiverse {renderer_type} | {mode_name}",
-                   (20, height - 20),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        # Text overlay removed for clean output
 
         return rendered_bgr
 
@@ -673,27 +659,24 @@ class VAVController:
         if self.cv_callback:
             self.cv_callback(self.cv_values.copy())
 
-        # Process audio through mixer with effects
-        # For now, process input audio through effects
-        left_in = indata[:, 0] if indata.shape[1] >= 1 else np.zeros(frames)
-        right_in = indata[:, 1] if indata.shape[1] >= 2 else left_in
-
-        # Route input directly to track 0 (no per-track effects)
-        track_inputs = []
+        # Mix 4 input channels with individual levels into mono
+        # Each channel is treated as mono, mixed together
+        mixed_mono = np.zeros(frames, dtype=np.float32)
 
         for i in range(4):
-            if i == 0:
-                # Track 0: Direct input audio (no effects)
-                track_l = left_in
-                track_r = right_in
-            else:
-                # Other tracks: Silent for now
-                track_l = np.zeros(frames, dtype=np.float32)
-                track_r = np.zeros(frames, dtype=np.float32)
+            if indata.shape[1] > i:
+                # Apply channel level and accumulate
+                mixed_mono += indata[:, i] * self.channel_levels[i]
 
-            track_inputs.append((track_l, track_r))
+        # Convert mono to stereo for Ellen Ripley (duplicate to L/R)
+        mixed_left = mixed_mono
+        mixed_right = mixed_mono
 
-        # Mix tracks
+        # Process mixed tracks through mixer (for compatibility)
+        track_inputs = [(mixed_left, mixed_right)]
+        for i in range(3):
+            track_inputs.append((np.zeros(frames, dtype=np.float32), np.zeros(frames, dtype=np.float32)))
+
         left_out, right_out = self.mixer.process(track_inputs)
 
         # Ellen Ripley master effect chain (if enabled)
@@ -885,6 +868,13 @@ class VAVController:
         """Set camera mix amount (0.0=pure multiverse, 1.0=pure camera)"""
         camera_mix = np.clip(camera_mix, 0.0, 1.0)
         self.renderer_params['camera_mix'] = camera_mix
+
+    # Channel level controls (for audio mixing before Ellen Ripley)
+    def set_channel_level(self, channel: int, level: float):
+        """Set level for a specific channel (0.0-1.0)"""
+        if 0 <= channel < 4:
+            level = np.clip(level, 0.0, 1.0)
+            self.channel_levels[channel] = level
 
     # Ellen Ripley effect chain controls
     def enable_ellen_ripley(self, enabled: bool):
