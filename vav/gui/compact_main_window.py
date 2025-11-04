@@ -1174,19 +1174,19 @@ class CompactMainWindow(QMainWindow):
             all_devices = sd.query_devices()
 
             # Audio input
-            if self.controller.audio_io.input_device is not None:
+            if self.controller.audio_io and self.controller.audio_io.input_device is not None:
                 dev = all_devices[self.controller.audio_io.input_device]
                 status_lines.append(f"In: {dev['name']}")
 
             # Audio output
-            if self.controller.audio_io.output_device is not None:
+            if self.controller.audio_io and self.controller.audio_io.output_device is not None:
                 dev = all_devices[self.controller.audio_io.output_device]
                 status_lines.append(f"Out: {dev['name']}")
         except Exception as e:
             # Fallback to device ID if name lookup fails
-            if self.controller.audio_io.input_device is not None:
+            if self.controller.audio_io and self.controller.audio_io.input_device is not None:
                 status_lines.append(f"In: Device {self.controller.audio_io.input_device}")
-            if self.controller.audio_io.output_device is not None:
+            if self.controller.audio_io and self.controller.audio_io.output_device is not None:
                 status_lines.append(f"Out: Device {self.controller.audio_io.output_device}")
 
         # Camera input
