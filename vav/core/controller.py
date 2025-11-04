@@ -82,7 +82,7 @@ class VAVController:
         self.channel_levels = [1.0, 1.0, 1.0, 1.0]  # 4 channel levels (0.0-1.0)
 
         # Audio buffers for Multiverse rendering (circular buffers)
-        self.audio_buffer_size = 4800  # ~100ms at 48kHz
+        self.audio_buffer_size = 2400  # 50ms at 48kHz (matches Multiverse.cpp)
         self.audio_buffers = [np.zeros(self.audio_buffer_size, dtype=np.float32) for _ in range(4)]
         self.audio_buffer_lock = threading.Lock()
         self.audio_frequencies = np.array([440.0, 440.0, 440.0, 440.0], dtype=np.float32)
@@ -141,12 +141,27 @@ class VAVController:
         # Initialize Contour CV Generator (replaces cable detection)
         self.contour_cv_generator = ContourCVGenerator()
 
-        # Initialize Multiverse renderer (Numba JIT > GPU > CPU)
+        # Initialize Multiverse renderer (GPU > Numba JIT > CPU) - TESTING GPU
         import platform
         is_macos = platform.system() == 'Darwin'
         renderer_initialized = False
 
-        # Try Numba JIT renderer first (best balance of speed & compatibility)
+        # Try Qt OpenGL (Metal) renderer first on macOS for GPU testing
+        if is_macos and not renderer_initialized:
+            try:
+                self.renderer = QtMultiverseRenderer(
+                    width=self.camera.width,
+                    height=self.camera.height
+                )
+                self.renderer.set_blend_mode(self.renderer_params['blend_mode'])
+                self.renderer.set_brightness(self.renderer_params['brightness'])
+                print(f"✓ Qt OpenGL (Metal) Multiverse renderer: {self.camera.width}x{self.camera.height} (GPU accelerated)")
+                self.using_gpu = True
+                renderer_initialized = True
+            except Exception as e:
+                print(f"⚠ Qt OpenGL renderer failed: {e}")
+
+        # Try Numba JIT renderer (CPU fallback)
         if NUMBA_AVAILABLE and not renderer_initialized:
             try:
                 self.renderer = NumbaMultiverseRenderer(
@@ -489,7 +504,7 @@ class VAVController:
 
         # Generate region map using input_frame (SD or camera) if region rendering is enabled
         region_map = None
-        if self.use_region_rendering and self.region_mapper and NUMBA_AVAILABLE and isinstance(self.renderer, NumbaMultiverseRenderer):
+        if self.use_region_rendering and self.region_mapper:
             if self.region_mode == 'brightness':
                 region_map = self.region_mapper.create_brightness_based_regions(input_frame)
             elif self.region_mode == 'color':
@@ -500,8 +515,8 @@ class VAVController:
                 region_map = self.region_mapper.create_edge_based_regions(input_frame)
 
         # Render using Multiverse engine (4 audio channels)
-        # Only Numba renderer supports region_map parameter
-        if region_map is not None and NUMBA_AVAILABLE and isinstance(self.renderer, NumbaMultiverseRenderer):
+        # Both Numba and Qt OpenGL renderers support region_map parameter
+        if region_map is not None:
             rendered_rgb = self.renderer.render(channels_data, region_map=region_map)
         else:
             rendered_rgb = self.renderer.render(channels_data)

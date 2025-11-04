@@ -111,29 +111,42 @@ class QtMultiverseRenderer(QOpenGLWidget):
     }
 
     void main() {
-        vec4 result = vec4(0.0);
-        bool firstChannel = true;
-
+        // Get region ID if using region map
         int currentRegion = -1;
         if (use_region_map > 0) {
-            float regionVal = texture(region_tex, v_texcoord).r;
+            // Flip Y coordinate for region map (OpenGL texture coordinates)
+            float regionVal = texture(region_tex, vec2(v_texcoord.x, 1.0 - v_texcoord.y)).r;
             currentRegion = int(regionVal * 255.0);
         }
 
+        // Render and blend all channels
+        vec4 result = vec4(0.0);
+        bool firstChannel = true;
+
         for (int ch = 0; ch < 4; ch++) {
             if (enabled_mask[ch] < 0.5) continue;
-
-            if (use_region_map > 0 && currentRegion != ch) continue;
 
             vec2 uv = v_texcoord;
             float curve = curves[ch];
             float angle = angles[ch];
 
-            // Apply rotation
+            // Apply rotation with dynamic scaling (match CPU's rotate_image)
             if (abs(angle) > 0.1) {
-                vec2 centered = uv - 0.5;
+                // Calculate scale to fill canvas and avoid black borders
+                float rad = radians(angle);
+                float abs_cos = abs(cos(rad));
+                float abs_sin = abs(sin(rad));
+                // Assuming square texture (width == height)
+                float scale_x = abs_cos + abs_sin;
+                float scale_y = abs_sin + abs_cos;
+                float scale = max(scale_x, scale_y);
+
+                // Apply inverse rotation with scaling
+                vec2 centered = (uv - 0.5) / scale;  // Scale before rotation
                 centered = rotate(centered, angle);
                 uv = centered + 0.5;
+
+                // Skip only if truly out of bounds after scaling
                 if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) continue;
             }
 
@@ -147,22 +160,33 @@ class QtMultiverseRenderer(QOpenGLWidget):
             }
 
             float waveValue = texture(audio_tex, vec2(x_sample, float(ch) / 4.0)).r;
-            float normalized = clamp(abs(waveValue) * 0.14 * intensities[ch], 0.0, 1.0);
+            // Match Multiverse.cpp AND Numba renderer: (voltage + 10.0) * 0.05 * intensity
+            // waveValue is in ±10V range, normalize to 0-1
+            float normalized = clamp((waveValue + 10.0) * 0.05 * intensities[ch], 0.0, 1.0);
 
             if (normalized > 0.01) {
                 float hue = getHueFromFrequency(frequencies[ch]);
                 vec3 rgb = hsv2rgb(vec3(hue, 1.0, 1.0));
                 vec4 channelColor = vec4(rgb * normalized, normalized);
 
-                if (firstChannel) {
-                    result = channelColor;
-                    firstChannel = false;
-                } else {
-                    result = blendColors(result, channelColor, blend_mode);
+                // Apply region filtering: zero out if not in this channel's region
+                if (use_region_map > 0 && ch != currentRegion) {
+                    channelColor = vec4(0.0);
+                }
+
+                // Only blend non-zero colors
+                if (channelColor.a > 0.001) {
+                    if (firstChannel) {
+                        result = channelColor;
+                        firstChannel = false;
+                    } else {
+                        result = blendColors(result, channelColor, blend_mode);
+                    }
                 }
             }
         }
 
+        // Apply brightness
         result.rgb *= brightness;
         fragColor = result;
     }
@@ -386,10 +410,12 @@ class QtMultiverseRenderer(QOpenGLWidget):
         glUseProgram(self.shader_program)
 
         # Update audio texture
+        # NOTE: audio_data is (4, width) C-contiguous, which matches OpenGL row-major layout
+        # Row 0 = Channel 0, Row 1 = Channel 1, etc. - NO transpose needed!
         glActiveTexture(GL_TEXTURE0)
         glBindTexture(GL_TEXTURE_2D, self.audio_tex)
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, self.render_width, 4,
-                       GL_RED, GL_FLOAT, self.audio_data.T)
+                       GL_RED, GL_FLOAT, self.audio_data)
 
         # Update region texture if available
         if self.region_map_data is not None:
