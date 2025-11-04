@@ -22,7 +22,7 @@ class CompactMainWindow(QMainWindow):
     """Compact main application window with efficient layout"""
 
     # Signals
-    frame_updated = pyqtSignal(np.ndarray, list)
+    frame_updated = pyqtSignal(np.ndarray)
     cv_updated = pyqtSignal(np.ndarray)
     visual_updated = pyqtSignal(dict)
 
@@ -235,21 +235,6 @@ class CompactMainWindow(QMainWindow):
         value.setFixedWidth(35)
         grid.addWidget(value, row1, COL1 + 2)
         self.smoothing_slider = (slider, value)
-        row1 += 1
-
-        # Min Length
-        grid.addWidget(QLabel("Min Length"), row1, COL1)
-        self.min_length_slider = QSlider(Qt.Orientation.Horizontal)
-        self.min_length_slider.setFixedHeight(16)
-        self.min_length_slider.setFixedWidth(140)
-        self.min_length_slider.setMinimum(10)
-        self.min_length_slider.setMaximum(200)
-        self.min_length_slider.setValue(50)
-        self.min_length_slider.valueChanged.connect(self._on_min_length_changed)
-        grid.addWidget(self.min_length_slider, row1, COL1 + 1)
-        self.min_length_label = QLabel("50")
-        self.min_length_label.setFixedWidth(30)
-        grid.addWidget(self.min_length_label, row1, COL1 + 2)
         row1 += 1
 
         # Mixer (moved from COL2)
@@ -520,11 +505,8 @@ class CompactMainWindow(QMainWindow):
         grid.addWidget(self.er_delay_fb_label, row4, COL4 + 2)
         row4 += 1
 
-        # Delay Chaos + Mix on same row
-        self.er_delay_chaos_checkbox = QCheckBox("Dly Chaos")
-        self.er_delay_chaos_checkbox.stateChanged.connect(self._on_er_delay_chaos_changed)
-        grid.addWidget(self.er_delay_chaos_checkbox, row4, COL4)
-
+        # Delay Mix
+        grid.addWidget(QLabel("Dly Mix"), row4, COL4)
         self.er_delay_mix_slider = QSlider(Qt.Orientation.Horizontal)
         self.er_delay_mix_slider.setFixedHeight(16)
         self.er_delay_mix_slider.setFixedWidth(120)
@@ -532,7 +514,16 @@ class CompactMainWindow(QMainWindow):
         self.er_delay_mix_slider.setMaximum(100)
         self.er_delay_mix_slider.setValue(0)
         self.er_delay_mix_slider.valueChanged.connect(self._on_er_delay_mix_changed)
-        grid.addWidget(self.er_delay_mix_slider, row4, COL4 + 1, 1, 2)
+        grid.addWidget(self.er_delay_mix_slider, row4, COL4 + 1)
+        self.er_delay_mix_label = QLabel("0.00")
+        self.er_delay_mix_label.setFixedWidth(30)
+        grid.addWidget(self.er_delay_mix_label, row4, COL4 + 2)
+        row4 += 1
+
+        # Delay Chaos
+        self.er_delay_chaos_checkbox = QCheckBox("Dly Chaos")
+        self.er_delay_chaos_checkbox.stateChanged.connect(self._on_er_delay_chaos_changed)
+        grid.addWidget(self.er_delay_chaos_checkbox, row4, COL4, 1, 3)
         row4 += 1
 
         # Grain Size
@@ -580,11 +571,8 @@ class CompactMainWindow(QMainWindow):
         grid.addWidget(self.er_grain_pos_label, row4, COL4 + 2)
         row4 += 1
 
-        # Grain Chaos + Mix on same row
-        self.er_grain_chaos_checkbox = QCheckBox("Grn Chaos")
-        self.er_grain_chaos_checkbox.stateChanged.connect(self._on_er_grain_chaos_changed)
-        grid.addWidget(self.er_grain_chaos_checkbox, row4, COL4)
-
+        # Grain Mix
+        grid.addWidget(QLabel("Grn Mix"), row4, COL4)
         self.er_grain_mix_slider = QSlider(Qt.Orientation.Horizontal)
         self.er_grain_mix_slider.setFixedHeight(16)
         self.er_grain_mix_slider.setFixedWidth(120)
@@ -592,7 +580,16 @@ class CompactMainWindow(QMainWindow):
         self.er_grain_mix_slider.setMaximum(100)
         self.er_grain_mix_slider.setValue(0)
         self.er_grain_mix_slider.valueChanged.connect(self._on_er_grain_mix_changed)
-        grid.addWidget(self.er_grain_mix_slider, row4, COL4 + 1, 1, 2)
+        grid.addWidget(self.er_grain_mix_slider, row4, COL4 + 1)
+        self.er_grain_mix_label = QLabel("0.00")
+        self.er_grain_mix_label.setFixedWidth(30)
+        grid.addWidget(self.er_grain_mix_label, row4, COL4 + 2)
+        row4 += 1
+
+        # Grain Chaos
+        self.er_grain_chaos_checkbox = QCheckBox("Grn Chaos")
+        self.er_grain_chaos_checkbox.stateChanged.connect(self._on_er_grain_chaos_changed)
+        grid.addWidget(self.er_grain_chaos_checkbox, row4, COL4, 1, 3)
         row4 += 1
 
         # ===== COLUMN 6: Ellen Ripley Reverb+Chaos =====
@@ -643,11 +640,8 @@ class CompactMainWindow(QMainWindow):
         grid.addWidget(self.er_reverb_decay_label, row5, COL5 + 2)
         row5 += 1
 
-        # Reverb Chaos + Mix on same row
-        self.er_reverb_chaos_checkbox = QCheckBox("Rev Chaos")
-        self.er_reverb_chaos_checkbox.stateChanged.connect(self._on_er_reverb_chaos_changed)
-        grid.addWidget(self.er_reverb_chaos_checkbox, row5, COL5)
-
+        # Reverb Mix
+        grid.addWidget(QLabel("Rev Mix"), row5, COL5)
         self.er_reverb_mix_slider = QSlider(Qt.Orientation.Horizontal)
         self.er_reverb_mix_slider.setFixedHeight(16)
         self.er_reverb_mix_slider.setFixedWidth(120)
@@ -655,7 +649,16 @@ class CompactMainWindow(QMainWindow):
         self.er_reverb_mix_slider.setMaximum(100)
         self.er_reverb_mix_slider.setValue(0)
         self.er_reverb_mix_slider.valueChanged.connect(self._on_er_reverb_mix_changed)
-        grid.addWidget(self.er_reverb_mix_slider, row5, COL5 + 1, 1, 2)
+        grid.addWidget(self.er_reverb_mix_slider, row5, COL5 + 1)
+        self.er_reverb_mix_label = QLabel("0.00")
+        self.er_reverb_mix_label.setFixedWidth(30)
+        grid.addWidget(self.er_reverb_mix_label, row5, COL5 + 2)
+        row5 += 1
+
+        # Reverb Chaos
+        self.er_reverb_chaos_checkbox = QCheckBox("Rev Chaos")
+        self.er_reverb_chaos_checkbox.stateChanged.connect(self._on_er_reverb_chaos_changed)
+        grid.addWidget(self.er_reverb_chaos_checkbox, row5, COL5, 1, 3)
         row5 += 1
 
         # Chaos Rate
@@ -977,28 +980,27 @@ class CompactMainWindow(QMainWindow):
         self.device_status_label.setStyleSheet("font-size: 8pt;")
         layout.addWidget(self.device_status_label)
 
-        # Cable detection
-        cable_layout = QGridLayout()
-        cable_layout.setSpacing(2)
-        min_label = QLabel("MinL")
-        min_label.setFixedWidth(30)
-        cable_layout.addWidget(min_label, 0, 0)
-        self.min_length_slider = QSlider(Qt.Orientation.Horizontal)
-        self.min_length_slider.setFixedHeight(18)
-        self.min_length_slider.setMinimum(10)
-        self.min_length_slider.setMaximum(200)
-        self.min_length_slider.setValue(50)
-        self.min_length_slider.valueChanged.connect(self._on_min_length_changed)
-        cable_layout.addWidget(self.min_length_slider, 0, 1)
-        self.min_length_label = QLabel("50")
-        self.min_length_label.setFixedWidth(25)
-        cable_layout.addWidget(self.min_length_label, 0, 2)
-        layout.addLayout(cable_layout)
-
         return widget
 
     # Event handlers
     def _on_start(self):
+        # Check if devices are configured
+        if not self.controller.audio_io or \
+           self.controller.audio_io.input_device is None or \
+           self.controller.audio_io.output_device is None:
+            # Show device selection dialog
+            print("[MainWindow] No devices configured, showing device dialog...")
+            self._on_select_device()
+
+            # Check again after device selection
+            if not self.controller.audio_io or \
+               self.controller.audio_io.input_device is None or \
+               self.controller.audio_io.output_device is None:
+                print("[MainWindow] Still no devices configured, cannot start")
+                self.status_label.setText("No devices selected")
+                return
+
+        # Start the system
         self.controller.start()
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
@@ -1139,11 +1141,6 @@ class CompactMainWindow(QMainWindow):
                 if was_running:
                     self.start_btn.setEnabled(True)
                     self.stop_btn.setEnabled(False)
-
-    def _on_min_length_changed(self, value: int):
-        self.min_length_label.setText(str(value))
-        if self.controller.cable_detector:
-            self.controller.cable_detector.min_length = value
 
     def _update_device_status(self):
         """Update device status display with current devices"""
@@ -1293,6 +1290,7 @@ class CompactMainWindow(QMainWindow):
 
     def _on_er_delay_mix_changed(self, value: int):
         mix = value / 100.0
+        self.er_delay_mix_label.setText(f"{mix:.2f}")
         self.controller.set_ellen_ripley_delay_params(wet_dry=mix)
 
     def _on_er_grain_size_changed(self, value: int):
@@ -1316,6 +1314,7 @@ class CompactMainWindow(QMainWindow):
 
     def _on_er_grain_mix_changed(self, value: int):
         mix = value / 100.0
+        self.er_grain_mix_label.setText(f"{mix:.2f}")
         self.controller.set_ellen_ripley_grain_params(wet_dry=mix)
 
     def _on_er_reverb_room_changed(self, value: int):
@@ -1339,6 +1338,7 @@ class CompactMainWindow(QMainWindow):
 
     def _on_er_reverb_mix_changed(self, value: int):
         mix = value / 100.0
+        self.er_reverb_mix_label.setText(f"{mix:.2f}")
         self.controller.set_ellen_ripley_reverb_params(wet_dry=mix)
 
     def _on_er_chaos_rate_changed(self, value: int):
@@ -1401,8 +1401,8 @@ class CompactMainWindow(QMainWindow):
             pass
 
     # Controller callbacks
-    def _on_frame(self, frame: np.ndarray, cables: list):
-        self.frame_updated.emit(frame, cables)
+    def _on_frame(self, frame: np.ndarray):
+        self.frame_updated.emit(frame)
 
     def _on_cv(self, cv_values: np.ndarray):
         self.cv_updated.emit(cv_values)
@@ -1411,7 +1411,7 @@ class CompactMainWindow(QMainWindow):
         self.visual_updated.emit(visual_params)
 
     # Qt slots
-    def _update_frame_display(self, frame: np.ndarray, cables: list):
+    def _update_frame_display(self, frame: np.ndarray):
         # Frame is already rendered (Simple or Multiverse mode) by controller
         # Just display it directly
         height, width = frame.shape[:2]

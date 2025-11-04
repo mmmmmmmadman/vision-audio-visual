@@ -246,7 +246,13 @@ class VAVController:
         )
 
         # Initialize Ellen Ripley effect chain
+        print("Warming up Ellen Ripley Numba JIT...")
         self.ellen_ripley = EllenRipleyEffectChain(sample_rate=self.sample_rate)
+
+        # Pre-warm Numba JIT compilation (prevent first-use audio glitch)
+        dummy_audio = np.zeros((256, 2), dtype=np.float32)
+        _ = self.ellen_ripley.process(dummy_audio[:, 0], dummy_audio[:, 1])
+        print("Ellen Ripley effect chain initialized")
 
         # Initialize region mapper
         self.region_mapper = ContentAwareRegionMapper(
@@ -379,19 +385,16 @@ class VAVController:
                 self._update_cv_values()
                 last_cv_update = current_time
 
-            # Detect contours for visualization
-            contours, edges = self.contour_cv_generator.detect_contours(gray)
-            self.edges = edges
-
             # Update trigger ring animations
             self.contour_cv_generator.update_trigger_rings()
 
             # Generate visualization frame (for both GUI and virtual camera)
-            display_frame = self._draw_visualization(frame, contours)
+            # Edge detection is now done inside Multiverse rendering (based on SD processed frame)
+            display_frame = self._draw_visualization(frame)
 
             # Callback for GUI frame update (send visualization, not raw frame)
             if self.frame_callback:
-                self.frame_callback(display_frame, contours)
+                self.frame_callback(display_frame)
 
             # Output to virtual camera if enabled
             if self.virtual_camera_enabled and self.virtual_camera is not None:
@@ -411,14 +414,14 @@ class VAVController:
             if sleep_time > 0:
                 time.sleep(sleep_time)
 
-    def _draw_visualization(self, frame, contours):
+    def _draw_visualization(self, frame):
         """Draw visualization using ContourCVGenerator overlay"""
         if self.use_multiverse_rendering:
-            return self._render_multiverse(frame, contours)
+            return self._render_multiverse(frame)
         else:
-            return self._render_simple(frame, contours)
+            return self._render_simple(frame)
 
-    def _render_simple(self, frame, contours):
+    def _render_simple(self, frame):
         """Simple visualization: use ContourCVGenerator overlay"""
         # Use ContourCVGenerator's draw_overlay method
         display_frame = self.contour_cv_generator.draw_overlay(
@@ -427,34 +430,34 @@ class VAVController:
         )
         return display_frame
 
-    def _render_multiverse(self, frame, cables):
+    def _render_multiverse(self, frame):
         """Multiverse rendering: frequency-based color mapping with blend modes (Qt OpenGL on macOS, ModernGL on others)"""
         if self.renderer is None:
-            return self._render_simple(frame, cables)
+            return self._render_simple(frame)
 
-        # 如果沒有線纜，顯示原始畫面加提示
-        if len(cables) == 0:
-            display_frame = frame.copy()
-            height, width = display_frame.shape[:2]
-            mode_names = ["Add", "Screen", "Diff", "Dodge"]
-            mode_name = mode_names[self.renderer_params['blend_mode']]
-            if NUMBA_AVAILABLE and isinstance(self.renderer, NumbaMultiverseRenderer):
-                renderer_type = "Numba JIT"
-            elif self.using_gpu and isinstance(self.renderer, QtMultiverseRenderer):
-                renderer_type = "Qt OpenGL"
-            elif self.using_gpu:
-                renderer_type = "GPU"
-            else:
-                renderer_type = "CPU"
-            cv2.putText(display_frame, f"Multiverse {renderer_type} | {mode_name} | No cables detected",
-                       (20, height - 20),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-            cv2.putText(display_frame, "Place cables/objects in frame for visualization",
-                       (20, height - 50),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
-            return display_frame
+        # Process SD img2img first (if enabled) - SD processes camera frame, not rendered output
+        input_frame = frame  # Default: use camera frame
+        if self.sd_enabled and self.sd_img2img:
+            # Feed camera frame to SD process
+            self.sd_img2img.feed_frame(frame)
 
-        # Prepare channel data for GPU Multiverse renderer
+            # Get SD processed result
+            sd_output = self.sd_img2img.get_current_output()
+
+            # If SD has output, use it as input_frame
+            if sd_output is not None:
+                # Ensure size matches
+                if sd_output.shape[:2] != frame.shape[:2]:
+                    sd_output = cv2.resize(sd_output, (frame.shape[1], frame.shape[0]))
+                input_frame = sd_output
+
+        # Detect edges from input_frame (SD or camera) for CV generation
+        # This ensures CV generation is based on the processed/styled image
+        gray_input = cv2.cvtColor(input_frame, cv2.COLOR_BGR2GRAY)
+        _, edges_new = self.contour_cv_generator.detect_contours(gray_input)
+        self.edges = edges_new  # Update edges to reflect SD processed content
+
+        # Prepare channel data for Multiverse renderer
         channels_data = []
 
         # Use real audio buffers (thread-safe access)
@@ -462,45 +465,42 @@ class VAVController:
             audio_buffers_copy = [buf.copy() for buf in self.audio_buffers]
             frequencies_copy = self.audio_frequencies.copy()
 
+        # Enable all 4 channels based on user intensity
         for ch_idx in range(4):
-            # Only enable channels with detected cables
-            if ch_idx < len(cables):
-                # Check if user intensity is near zero (disable channel)
-                user_intensity = self.renderer_params['channel_intensities'][ch_idx]
-                if user_intensity < 0.01:
-                    channels_data.append({'enabled': False})
-                else:
-                    # Get envelope value for intensity modulation
-                    env_idx = ch_idx % 3
-                    base_intensity = 0.8  # Base intensity
-                    env_value = self.cv_values[env_idx] if env_idx < 3 else 0.5
-                    intensity = base_intensity + (env_value * 0.7)  # 0.8 to 1.5 range
-                    intensity = float(np.clip(intensity * user_intensity, 0.0, 2.0))
-
-                    channels_data.append({
-                        'enabled': True,
-                        'audio': audio_buffers_copy[ch_idx],  # Real audio from ES-8!
-                        'frequency': float(frequencies_copy[ch_idx]),  # Detected frequency
-                        'intensity': intensity,
-                        'curve': self.renderer_params['channel_curves'][ch_idx],
-                        'angle': self.renderer_params['channel_angles'][ch_idx],
-                    })
-            else:
+            # Check if user intensity is near zero (disable channel)
+            user_intensity = self.renderer_params['channel_intensities'][ch_idx]
+            if user_intensity < 0.01:
                 channels_data.append({'enabled': False})
+            else:
+                # Get envelope value for intensity modulation
+                env_idx = ch_idx % 3
+                base_intensity = 0.8  # Base intensity
+                env_value = self.cv_values[env_idx] if env_idx < 3 else 0.5
+                intensity = base_intensity + (env_value * 0.7)  # 0.8 to 1.5 range
+                intensity = float(np.clip(intensity * user_intensity, 0.0, 2.0))
 
-        # Generate region map if region rendering is enabled (only for Numba renderer)
+                channels_data.append({
+                    'enabled': True,
+                    'audio': audio_buffers_copy[ch_idx],  # Real audio from ES-8!
+                    'frequency': float(frequencies_copy[ch_idx]),  # Detected frequency
+                    'intensity': intensity,
+                    'curve': self.renderer_params['channel_curves'][ch_idx],
+                    'angle': self.renderer_params['channel_angles'][ch_idx],
+                })
+
+        # Generate region map using input_frame (SD or camera) if region rendering is enabled
         region_map = None
         if self.use_region_rendering and self.region_mapper and NUMBA_AVAILABLE and isinstance(self.renderer, NumbaMultiverseRenderer):
             if self.region_mode == 'brightness':
-                region_map = self.region_mapper.create_brightness_based_regions(frame)
+                region_map = self.region_mapper.create_brightness_based_regions(input_frame)
             elif self.region_mode == 'color':
-                region_map = self.region_mapper.create_color_based_regions(frame)
+                region_map = self.region_mapper.create_color_based_regions(input_frame)
             elif self.region_mode == 'quadrant':
-                region_map = self.region_mapper.create_quadrant_regions(frame)
+                region_map = self.region_mapper.create_quadrant_regions(input_frame)
             elif self.region_mode == 'edge':
-                region_map = self.region_mapper.create_edge_based_regions(frame)
+                region_map = self.region_mapper.create_edge_based_regions(input_frame)
 
-        # Render using Multiverse engine
+        # Render using Multiverse engine (4 audio channels)
         # Only Numba renderer supports region_map parameter
         if region_map is not None and NUMBA_AVAILABLE and isinstance(self.renderer, NumbaMultiverseRenderer):
             rendered_rgb = self.renderer.render(channels_data, region_map=region_map)
@@ -510,35 +510,36 @@ class VAVController:
         # Convert RGB to BGR for OpenCV
         rendered_bgr = cv2.cvtColor(rendered_rgb, cv2.COLOR_RGB2BGR)
 
-        # Blend with camera input if camera_mix > 0
+        # Blend 5th layer (SD or camera) with Multiverse rendering if camera_mix > 0
+        # input_frame is either SD output or original camera frame
         camera_mix = self.renderer_params['camera_mix']
         if camera_mix > 0.0:
-            # Resize camera frame to match renderer output if needed
-            if frame.shape[:2] != rendered_bgr.shape[:2]:
-                camera_frame = cv2.resize(frame, (rendered_bgr.shape[1], rendered_bgr.shape[0]))
+            # Resize input_frame to match renderer output if needed
+            if input_frame.shape[:2] != rendered_bgr.shape[:2]:
+                blend_frame = cv2.resize(input_frame, (rendered_bgr.shape[1], rendered_bgr.shape[0]))
             else:
-                camera_frame = frame
+                blend_frame = input_frame
 
             # Apply blend mode (same as Multiverse channels)
             blend_mode = self.renderer_params['blend_mode']
 
             # Convert to float for blending (0-1 range)
             base_float = rendered_bgr.astype(np.float32) / 255.0
-            camera_float = camera_frame.astype(np.float32) / 255.0
+            blend_float = blend_frame.astype(np.float32) / 255.0
 
             # Apply camera_mix as alpha
-            camera_float = camera_float * camera_mix
+            blend_float = blend_float * camera_mix
 
             # Blend based on mode
             if blend_mode == 0:  # Add
-                result = np.clip(base_float + camera_float, 0.0, 1.0)
+                result = np.clip(base_float + blend_float, 0.0, 1.0)
             elif blend_mode == 1:  # Screen
-                result = 1.0 - (1.0 - base_float) * (1.0 - camera_float)
+                result = 1.0 - (1.0 - base_float) * (1.0 - blend_float)
             elif blend_mode == 2:  # Difference
-                result = np.abs(base_float - camera_float)
+                result = np.abs(base_float - blend_float)
             elif blend_mode == 3:  # Color Dodge
-                result = np.where(camera_float < 0.999,
-                                 np.clip(base_float / np.maximum(0.001, 1.0 - camera_float), 0.0, 1.0),
+                result = np.where(blend_float < 0.999,
+                                 np.clip(base_float / np.maximum(0.001, 1.0 - blend_float), 0.0, 1.0),
                                  1.0)
             else:
                 result = base_float
@@ -546,8 +547,12 @@ class VAVController:
             # Convert back to uint8
             rendered_bgr = (result * 255.0).astype(np.uint8)
 
-        # Contours overlay is already done by ContourCVGenerator.draw_overlay()
-        # No need to overlay again here
+        # Draw CV overlays (dashboard, SEQ lines, ENV rings) - must be on top
+        rendered_bgr = self.contour_cv_generator.draw_overlay(
+            rendered_bgr,
+            self.edges if self.edges is not None else np.zeros_like(rendered_bgr[:,:,0]),
+            envelopes=self.envelopes
+        )
 
         # Add info text
         height, width = rendered_bgr.shape[:2]
@@ -561,7 +566,7 @@ class VAVController:
             renderer_type = "GPU"
         else:
             renderer_type = "CPU"
-        cv2.putText(rendered_bgr, f"Multiverse {renderer_type} | {mode_name} | Cables: {len(cables)}",
+        cv2.putText(rendered_bgr, f"Multiverse {renderer_type} | {mode_name}",
                    (20, height - 20),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
@@ -930,17 +935,28 @@ class VAVController:
     # SD img2img controls
     def set_sd_enabled(self, enabled: bool):
         """Enable/disable SD img2img"""
-        self.sd_enabled = enabled
         if enabled:
             if not self.sd_img2img:
                 print("[Controller] Initializing SD img2img...")
-                self.sd_img2img = SDImg2ImgProcess(
-                    output_width=1280,
-                    output_height=720,
-                    fps_target=30
-                )
-                self.sd_img2img.start()
-                print("[Controller] SD img2img started")
+
+                # 在背景線程延遲啟動以避免阻塞音頻
+                import threading
+                import time
+                def _start_sd():
+                    # 等待 100ms 讓音頻處理穩定
+                    time.sleep(0.1)
+                    self.sd_img2img = SDImg2ImgProcess(
+                        output_width=1280,
+                        output_height=720,
+                        fps_target=30
+                    )
+                    self.sd_img2img.start()
+                    # 啟動完成後才啟用
+                    self.sd_enabled = True
+                    print("[Controller] SD img2img started")
+
+                start_thread = threading.Thread(target=_start_sd, daemon=True)
+                start_thread.start()
         else:
             if self.sd_img2img:
                 print("[Controller] Stopping SD img2img...")
