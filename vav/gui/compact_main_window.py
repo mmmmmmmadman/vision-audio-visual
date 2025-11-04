@@ -12,9 +12,9 @@ from PyQt6.QtGui import QImage, QPixmap
 import numpy as np
 import cv2
 
-from .scope_widget import ScopeWidget
 from .device_dialog import DeviceSelectionDialog
 from .anchor_xy_pad import AnchorXYPad
+from .cv_meter_window import CVMeterWindow
 from ..core.controller import VAVController
 
 
@@ -44,6 +44,10 @@ class CompactMainWindow(QMainWindow):
 
         # Build UI
         self._build_ui()
+
+        # CV Meter Window (independent)
+        self.cv_meter_window = CVMeterWindow()
+        self.cv_meter_window.show()
 
         # Status bar
         self.status_label = QLabel("Ready")
@@ -99,18 +103,6 @@ class CompactMainWindow(QMainWindow):
         control_layout.addStretch()
         main_layout.addLayout(control_layout)
 
-        # Use splitter to make scope resizable
-        from PyQt6.QtWidgets import QSplitter
-        splitter = QSplitter(Qt.Orientation.Vertical)
-
-        # Scope (resizable)
-        scope_group = QGroupBox("Scope")
-        scope_layout = QVBoxLayout(scope_group)
-        scope_layout.setContentsMargins(2, 2, 2, 2)
-        self.scope_widget = ScopeWidget(num_channels=5)
-        scope_layout.addWidget(self.scope_widget)
-        splitter.addWidget(scope_group)
-
         # Controls in compact widget
         controls_widget = QWidget()
         controls_grid = QGridLayout(controls_widget)
@@ -122,14 +114,8 @@ class CompactMainWindow(QMainWindow):
             controls_grid.setColumnStretch(i, 0)  # No stretch for control columns
         controls_grid.setColumnStretch(18, 1)  # Stretch remainder
         self._build_all_controls_inline(controls_grid)
-        splitter.addWidget(controls_widget)
 
-        # Set initial sizes: scope gets 40%, controls get 60%
-        splitter.setSizes([200, 200])
-        splitter.setStretchFactor(0, 2)  # Scope stretches more
-        splitter.setStretchFactor(1, 1)  # Controls stay compact
-
-        main_layout.addWidget(splitter)
+        main_layout.addWidget(controls_widget)
 
         # Video window (separate)
         self.video_window = QWidget()
@@ -1374,14 +1360,18 @@ class CompactMainWindow(QMainWindow):
         self.video_label.setPixmap(QPixmap.fromImage(q_image))
 
     def _update_cv_display(self, cv_values: np.ndarray):
-        self.scope_widget.add_samples(cv_values)
-        # CV Meter Window removed - use Scope Widget instead
+        """Update CV Meter Window with new CV values"""
+        if self.cv_meter_window:
+            self.cv_meter_window.update_values(cv_values)
 
     def _update_visual_display(self, visual_params: dict):
         pass
 
     def closeEvent(self, event):
+        """Close all windows and stop controller"""
         self.controller.stop()
+        if self.cv_meter_window:
+            self.cv_meter_window.close()
         event.accept()
 
 
