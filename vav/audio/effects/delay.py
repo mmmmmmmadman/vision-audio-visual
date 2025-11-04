@@ -1,9 +1,52 @@
 """
 Stereo delay with feedback
 Ported from EllenRipley.cpp
+Numba optimized version
 """
 
 import numpy as np
+from numba import njit
+
+
+@njit(fastmath=True, cache=True)
+def process_stereo_delay_numba(
+    left_in, right_in,
+    left_buffer, right_buffer,
+    write_index,
+    delay_samples_l, delay_samples_r,
+    feedback,
+    buffer_size_max
+):
+    """
+    Numba-optimized stereo delay processing
+
+    Returns: (left_out, right_out, final_write_index)
+    """
+    buffer_len = len(left_in)
+    left_out = np.zeros(buffer_len, dtype=np.float32)
+    right_out = np.zeros(buffer_len, dtype=np.float32)
+
+    for i in range(buffer_len):
+        # Calculate read indices
+        read_index_l = (write_index - delay_samples_l) % buffer_size_max
+        read_index_r = (write_index - delay_samples_r) % buffer_size_max
+
+        # Read delayed signals
+        left_delayed = left_buffer[read_index_l]
+        right_delayed = right_buffer[read_index_r]
+
+        # Write input + feedback to buffer
+        left_buffer[write_index] = left_in[i] + left_delayed * feedback
+        right_buffer[write_index] = right_in[i] + right_delayed * feedback
+
+        # Output delayed signals
+        left_out[i] = left_delayed
+        right_out[i] = right_delayed
+
+        # Advance write index
+        write_index = (write_index + 1) % buffer_size_max
+
+    return left_out, right_out, write_index
 
 
 class StereoDelay:
@@ -40,10 +83,6 @@ class StereoDelay:
         Process stereo input
         Returns: (left_out, right_out)
         """
-        buffer_size = len(left_in)
-        left_out = np.zeros(buffer_size, dtype=np.float32)
-        right_out = np.zeros(buffer_size, dtype=np.float32)
-
         # Calculate delay samples
         delay_samples_l = int(self.delay_time_l * self.sample_rate)
         delay_samples_r = int(self.delay_time_r * self.sample_rate)
@@ -51,25 +90,15 @@ class StereoDelay:
         delay_samples_l = np.clip(delay_samples_l, 1, self.buffer_size - 1)
         delay_samples_r = np.clip(delay_samples_r, 1, self.buffer_size - 1)
 
-        for i in range(buffer_size):
-            # Calculate read indices
-            read_index_l = (self.write_index - delay_samples_l) % self.buffer_size
-            read_index_r = (self.write_index - delay_samples_r) % self.buffer_size
-
-            # Read delayed signals
-            left_delayed = self.left_buffer[read_index_l]
-            right_delayed = self.right_buffer[read_index_r]
-
-            # Write input + feedback to buffer
-            self.left_buffer[self.write_index] = left_in[i] + left_delayed * self.feedback
-            self.right_buffer[self.write_index] = right_in[i] + right_delayed * self.feedback
-
-            # Output delayed signals
-            left_out[i] = left_delayed
-            right_out[i] = right_delayed
-
-            # Advance write index
-            self.write_index = (self.write_index + 1) % self.buffer_size
+        # Call Numba-optimized function
+        left_out, right_out, self.write_index = process_stereo_delay_numba(
+            left_in, right_in,
+            self.left_buffer, self.right_buffer,
+            self.write_index,
+            delay_samples_l, delay_samples_r,
+            self.feedback,
+            self.buffer_size
+        )
 
         return left_out, right_out
 
