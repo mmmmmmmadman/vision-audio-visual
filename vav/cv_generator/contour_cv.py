@@ -43,6 +43,10 @@ class ContourCVGenerator:
         self.seq1_values = np.zeros(32, dtype=np.float32)  # SEQ1 序列值（最多32步）
         self.seq2_values = np.zeros(32, dtype=np.float32)  # SEQ2 序列值（最多32步）
 
+        # 步進變化標記（供 sequential switch 使用）
+        self.seq1_step_changed = False
+        self.seq2_step_changed = False
+
         # SEQ 統一時鐘參數
         self.clock_rate = 120  # 統一 BPM (SEQ1 和 SEQ2 共用)
         self.step_timer = 0.0  # 統一步進計時器
@@ -76,6 +80,10 @@ class ContourCVGenerator:
         self.step_timer += dt
         step_interval = 60.0 / self.clock_rate if self.clock_rate > 0 else 0.5
 
+        # 重置步進標記
+        self.seq1_step_changed = False
+        self.seq2_step_changed = False
+
         if self.step_timer >= step_interval:
             self.step_timer = 0.0
             # 同步步進
@@ -85,6 +93,10 @@ class ContourCVGenerator:
             # 讀取當前步的值（0-1）
             self.seq1_value = self.seq1_values[self.current_step_x]
             self.seq2_value = self.seq2_values[self.current_step_y]
+
+            # 設置步進變化標記
+            self.seq1_step_changed = True
+            self.seq2_step_changed = True
 
             # 轉換為電壓（0-10V）
             seq1_voltage = self.seq1_value * 10.0

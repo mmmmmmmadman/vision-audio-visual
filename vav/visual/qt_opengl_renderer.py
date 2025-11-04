@@ -57,6 +57,8 @@ class QtMultiverseRenderer(QOpenGLWidget):
     uniform int blend_mode;
     uniform float brightness;
     uniform int use_region_map;
+    uniform float base_hue;
+    uniform vec3 envelope_offsets;  // env1-3 values (0.0-1.0)
 
     in vec2 v_texcoord;
     out vec4 fragColor;
@@ -69,11 +71,38 @@ class QtMultiverseRenderer(QOpenGLWidget):
         return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
     }
 
-    float getHueFromFrequency(float freq) {
-        freq = clamp(freq, 20.0, 20000.0);
-        float baseFreq = 261.63;
-        float octavePosition = fract(log2(freq / baseFreq));
-        return octavePosition;
+    vec3 getChannelColor(int ch) {
+        // 方案1 (Hue Rotation): 三層維持 120° 互補色，ENV1 控制 base hue 旋轉
+        float hue = base_hue;
+        float saturation = 1.0;
+        float value = 1.0;
+
+        // ENV1 控制整體色相旋轉 (0-360°)
+        float hue_rotation = envelope_offsets.x;
+
+        if (ch == 0) {
+            // Channel 1: Layer 1 (base hue + ENV1 rotation)
+            hue = fract(base_hue + hue_rotation);
+            saturation = 1.0;
+            value = 1.0;
+        } else if (ch == 1) {
+            // Channel 2: Layer 2 (+120° offset, ENV2 控制飽和度)
+            hue = fract(base_hue + hue_rotation + 0.333);  // +120° = +1/3
+            saturation = 0.5 + 0.5 * envelope_offsets.y;   // ENV2 控制飽和度 (0.5-1.0)
+            value = 1.0;
+        } else if (ch == 2) {
+            // Channel 3: Layer 3 (+240° offset, ENV3 控制飽和度)
+            hue = fract(base_hue + hue_rotation + 0.667);  // +240° = +2/3
+            saturation = 0.5 + 0.5 * envelope_offsets.z;   // ENV3 控制飽和度 (0.5-1.0)
+            value = 1.0;
+        } else {
+            // Channel 4: 額外通道（如有需要）
+            hue = fract(base_hue + hue_rotation);
+            saturation = 0.8;
+            value = 0.9;
+        }
+
+        return hsv2rgb(vec3(hue, saturation, value));
     }
 
     vec2 rotate(vec2 pos, float angle) {
@@ -165,8 +194,7 @@ class QtMultiverseRenderer(QOpenGLWidget):
             float normalized = clamp((waveValue + 10.0) * 0.05 * intensities[ch], 0.0, 1.0);
 
             if (normalized > 0.01) {
-                float hue = getHueFromFrequency(frequencies[ch]);
-                vec3 rgb = hsv2rgb(vec3(hue, 1.0, 1.0));
+                vec3 rgb = getChannelColor(ch);
                 vec4 channelColor = vec4(rgb * normalized, normalized);
 
                 // Apply region filtering: zero out if not in this channel's region
@@ -225,6 +253,8 @@ class QtMultiverseRenderer(QOpenGLWidget):
         # Rendering parameters
         self.blend_mode = 0
         self.brightness = 2.5
+        self.base_hue = 0.0  # Base hue in range 0.0-1.0
+        self.envelope_offsets = np.array([0.0, 0.0, 0.0], dtype=np.float32)  # env1-3 values (0.0-1.0)
 
         # Audio data
         self.audio_data = np.zeros((4, width), dtype=np.float32)
@@ -443,6 +473,10 @@ class QtMultiverseRenderer(QOpenGLWidget):
                    self.brightness)
         glUniform1i(glGetUniformLocation(self.shader_program, b"use_region_map"),
                    self.use_region_map)
+        glUniform1f(glGetUniformLocation(self.shader_program, b"base_hue"),
+                   self.base_hue)
+        glUniform3f(glGetUniformLocation(self.shader_program, b"envelope_offsets"),
+                   self.envelope_offsets[0], self.envelope_offsets[1], self.envelope_offsets[2])
 
         # Bind textures and draw
         glActiveTexture(GL_TEXTURE0)
@@ -625,6 +659,16 @@ class QtMultiverseRenderer(QOpenGLWidget):
     def set_blend_mode(self, mode: int):
         """Set blend mode (0-3)"""
         self.blend_mode = max(0, min(3, mode))
+
+    def set_base_hue(self, hue: float):
+        """Set base hue (0.0-1.0 range)"""
+        self.base_hue = max(0.0, min(1.0, hue))
+
+    def set_envelope_offsets(self, env1: float, env2: float, env3: float):
+        """Set envelope offsets (0.0-1.0 range for each)"""
+        self.envelope_offsets[0] = max(0.0, min(1.0, env1))
+        self.envelope_offsets[1] = max(0.0, min(1.0, env2))
+        self.envelope_offsets[2] = max(0.0, min(1.0, env3))
 
     def set_brightness(self, brightness: float):
         """Set brightness (0-4)"""

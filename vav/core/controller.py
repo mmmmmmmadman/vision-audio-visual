@@ -93,6 +93,10 @@ class VAVController:
         self.sequencers: List[SequenceCV] = []
         self.cv_values = np.zeros(5, dtype=np.float32)  # 5 CV outputs
 
+        # Sequential switch tracking for seq1/seq2
+        self.seq1_current_channel = 0  # 0-3 for curve control
+        self.seq2_current_channel = 0  # 0-3 for angle control
+
         # Audio system
         self.audio_io: Optional[AudioIO] = None
         self.mixer: Optional[StereoMixer] = None
@@ -120,6 +124,7 @@ class VAVController:
         self.frame_callback: Optional[Callable] = None
         self.cv_callback: Optional[Callable] = None
         self.visual_callback: Optional[Callable] = None
+        self.param_callback: Optional[Callable] = None
 
     def initialize(self) -> bool:
         """Initialize all subsystems"""
@@ -514,6 +519,14 @@ class VAVController:
             elif self.region_mode == 'edge':
                 region_map = self.region_mapper.create_edge_based_regions(input_frame)
 
+        # Update envelope offsets for GPU renderer (env1-3 control tracks 1-3 hue angles)
+        if self.using_gpu and hasattr(self.renderer, 'set_envelope_offsets'):
+            self.renderer.set_envelope_offsets(
+                self.cv_values[0],  # env1 for channel 1
+                self.cv_values[1],  # env2 for channel 2
+                self.cv_values[2]   # env3 for channel 3
+            )
+
         # Render using Multiverse engine (4 audio channels)
         # Both Numba and Qt OpenGL renderers support region_map parameter
         if region_map is not None:
@@ -585,18 +598,26 @@ class VAVController:
         return rendered_bgr
 
     def _update_cv_values(self):
-        """Update CV generator values and send to GUI"""
-        # Update envelopes (single sample step)
-        for j, env in enumerate(self.envelopes):
-            self.cv_values[j] = env.process()
+        """Update CV generator values and handle sequential switch"""
+        # Sequential switch logic: check if ContourCV seq1/seq2 stepped
+        if self.contour_cv_generator:
+            # SEQ1 -> Curve (輪流控制 channel 0-3 的 curve, 擴大範圍 0-5)
+            if self.contour_cv_generator.seq1_step_changed:
+                seq1_value = self.contour_cv_generator.seq1_value
+                curve_value = seq1_value * 5.0
+                self.renderer_params['channel_curves'][self.seq1_current_channel] = curve_value
+                if self.param_callback:
+                    self.param_callback("curve", self.seq1_current_channel, curve_value)
+                self.seq1_current_channel = (self.seq1_current_channel + 1) % 4
 
-        # Update sequencers (single sample step)
-        for j, seq in enumerate(self.sequencers):
-            self.cv_values[3 + j] = seq.process()
-
-        # CV callback for GUI scope update
-        if self.cv_callback:
-            self.cv_callback(self.cv_values.copy())
+            # SEQ2 -> Angle (輪流控制 channel 0-3 的 angle, 擴大範圍多圈)
+            if self.contour_cv_generator.seq2_step_changed:
+                seq2_value = self.contour_cv_generator.seq2_value
+                angle_value = seq2_value * 720.0
+                self.renderer_params['channel_angles'][self.seq2_current_channel] = angle_value
+                if self.param_callback:
+                    self.param_callback("angle", self.seq2_current_channel, angle_value)
+                self.seq2_current_channel = (self.seq2_current_channel + 1) % 4
 
     # Contour CV controls (replacing cable analysis)
     def set_anchor_position(self, x_pct: float, y_pct: float):
@@ -677,9 +698,14 @@ class VAVController:
             for j, env in enumerate(self.envelopes):
                 self.cv_values[j] = env.process()
 
-            # Update sequencers
-            for j, seq in enumerate(self.sequencers):
-                self.cv_values[3 + j] = seq.process()
+            # Update SEQ1/SEQ2 from ContourCV generator (直接使用 ContourCV 的值)
+            if self.contour_cv_generator:
+                self.cv_values[3] = self.contour_cv_generator.seq1_value  # SEQ1
+                self.cv_values[4] = self.contour_cv_generator.seq2_value  # SEQ2
+            else:
+                # Fallback: use internal sequencers if ContourCV not available
+                for j, seq in enumerate(self.sequencers):
+                    self.cv_values[3 + j] = seq.process()
 
         # CV callback for GUI scope update
         if self.cv_callback:
@@ -794,6 +820,10 @@ class VAVController:
         """Set callback for visual parameter updates"""
         self.visual_callback = callback
 
+    def set_param_callback(self, callback: Callable):
+        """Set callback for parameter updates (param_name, channel, value)"""
+        self.param_callback = callback
+
     def enable_virtual_camera(self) -> bool:
         """Enable virtual camera output"""
         if not PYVIRTUALCAM_AVAILABLE:
@@ -871,6 +901,13 @@ class VAVController:
         self.renderer_params['brightness'] = brightness
         if self.renderer:
             self.renderer.set_brightness(brightness)
+
+    def set_renderer_base_hue(self, hue: float):
+        """Set Multiverse base hue (0.0-1.0)"""
+        hue = np.clip(hue, 0.0, 1.0)
+        self.renderer_params['base_hue'] = hue
+        if self.renderer:
+            self.renderer.set_base_hue(hue)
 
     def set_renderer_channel_curve(self, channel: int, curve: float):
         """Set curve for a specific channel (0-1)"""
