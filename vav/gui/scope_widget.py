@@ -72,7 +72,7 @@ class ScopeWidget(QWidget):
 
             # Create curve
             curve = plot_item.plot(
-                pen=pg.mkPen(color=self.colors[i], width=2)
+                pen=pg.mkPen(color=self.colors[i], width=3)
             )
 
             self.plot_items.append(plot_item)

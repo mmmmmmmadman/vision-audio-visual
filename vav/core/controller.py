@@ -357,8 +357,19 @@ class VAVController:
 
             self.current_frame = frame
 
-            # Convert to grayscale for edge detection
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            # Determine CV detection source: SD output (if available) or camera
+            cv_input_frame = frame  # Default: use camera frame
+            if self.sd_enabled and self.sd_img2img:
+                sd_output = self.sd_img2img.get_current_output()
+                if sd_output is not None:
+                    # Ensure size matches
+                    if sd_output.shape[:2] != frame.shape[:2]:
+                        cv_input_frame = cv2.resize(sd_output, (frame.shape[1], frame.shape[0]))
+                    else:
+                        cv_input_frame = sd_output
+
+            # Convert to grayscale for edge detection (from SD or camera, not multiverse)
+            gray = cv2.cvtColor(cv_input_frame, cv2.COLOR_BGR2GRAY)
 
             # Generate sequence values from edge detection
             self.contour_cv_generator.sample_edge_sequences(gray)

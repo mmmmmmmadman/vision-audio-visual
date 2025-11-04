@@ -332,17 +332,18 @@ class ContourCVGenerator:
         height, width = frame.shape[:2]
         output = frame.copy()
 
-        # 疊加邊緣檢測結果（白色半透明，3倍粗）
-        # 使用 dilate 將邊緣加粗3倍
-        kernel = np.ones((3, 3), np.uint8)
-        edges_thick = cv2.dilate(edges, kernel, iterations=2)  # 2次迭代約3倍粗
-
-        edges_bgr = cv2.cvtColor(edges_thick, cv2.COLOR_GRAY2BGR)
-        mask = edges_thick > 0
-
-        # 只在有邊緣時才疊加（避免空陣列導致崩潰）
-        if np.any(mask):
-            output[mask] = cv2.addWeighted(output[mask], 0.7, edges_bgr[mask], 0.3, 0)
+        # 邊緣檢測視覺化已停用（保留功能性邊緣檢測用於 SEQ1/2）
+        # # 疊加邊緣檢測結果（白色半透明，3倍粗）
+        # # 使用 dilate 將邊緣加粗3倍
+        # kernel = np.ones((3, 3), np.uint8)
+        # edges_thick = cv2.dilate(edges, kernel, iterations=2)  # 2次迭代約3倍粗
+        #
+        # edges_bgr = cv2.cvtColor(edges_thick, cv2.COLOR_GRAY2BGR)
+        # mask = edges_thick > 0
+        #
+        # # 只在有邊緣時才疊加（避免空陣列導致崩潰）
+        # if np.any(mask):
+        #     output[mask] = cv2.addWeighted(output[mask], 0.7, edges_bgr[mask], 0.3, 0)
 
         # 繪製 SEQ 邊緣曲線（與 ENV 配色一致）
         color_seq1 = (133, 133, 255)  # 粉色 #FF8585 (ENV1)
@@ -380,6 +381,21 @@ class ContourCVGenerator:
                 overlay = output.copy()
                 cv2.circle(overlay, pos, radius, color, 1)
                 cv2.addWeighted(overlay, alpha, output, 1 - alpha, 0, output)
+
+        # 繪製 Anchor 粉白圓圈（與 2D 操作畫面相同設計）
+        height, width = output.shape[:2]
+        anchor_x = int(self.anchor_x_pct * width / 100.0)
+        # Y 軸反轉：2D 控制上方=主視覺上方
+        anchor_y = int((100.0 - self.anchor_y_pct) * height / 100.0)
+
+        # 外圈白色
+        cv2.circle(output, (anchor_x, anchor_y), 6, (255, 255, 255), 2)
+        # 內圈粉色填充（與 2D 操作畫面相同的粉白色）
+        overlay = output.copy()
+        cv2.circle(overlay, (anchor_x, anchor_y), 6, (255, 133, 133, 200), -1)
+        cv2.addWeighted(overlay, 0.8, output, 0.2, 0, output)
+        # 內圈白色邊框
+        cv2.circle(output, (anchor_x, anchor_y), 3, (255, 255, 255), 1)
 
         # 繪製 CV 數據儀表板（左上角）
         self._draw_data_dashboard(output, envelopes)
