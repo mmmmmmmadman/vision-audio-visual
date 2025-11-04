@@ -14,6 +14,7 @@ import cv2
 
 from .scope_widget import ScopeWidget
 from .device_dialog import DeviceSelectionDialog
+from .cv_meter_window import CVMeterWindow
 from ..core.controller import VAVController
 
 
@@ -43,6 +44,10 @@ class CompactMainWindow(QMainWindow):
 
         # Build UI
         self._build_ui()
+
+        # CV Meter Window (獨立視窗)
+        self.cv_meter_window = CVMeterWindow()
+        self.cv_meter_window.show()
 
         # Status bar
         self.status_label = QLabel("Ready")
@@ -172,41 +177,119 @@ class CompactMainWindow(QMainWindow):
             self.env_sliders.append((slider, value_label))
             row1 += 1
 
-        # SEQ 1-2
+        # SEQ 1-2 Steps
         self.seq_steps_spinners = []
-        self.seq_freq_sliders = []
         for i in range(2):
-            # Steps
             grid.addWidget(QLabel(f"SEQ {i+1} Steps"), row1, COL1)
             slider = QSlider(Qt.Orientation.Horizontal)
             slider.setFixedHeight(16)
             slider.setFixedWidth(140)
             slider.setMinimum(4)
             slider.setMaximum(32)
-            slider.setValue(16)
+            slider.setValue(8)
             slider.valueChanged.connect(lambda val, idx=i: self._on_seq_steps_changed(idx, val))
             grid.addWidget(slider, row1, COL1 + 1)
-            value = QLabel("16")
+            value = QLabel("8")
             value.setFixedWidth(25)
             grid.addWidget(value, row1, COL1 + 2)
             self.seq_steps_spinners.append((slider, value))
             row1 += 1
 
-            # Freq
-            grid.addWidget(QLabel(f"SEQ {i+1} Freq"), row1, COL1)
-            slider = QSlider(Qt.Orientation.Horizontal)
-            slider.setFixedHeight(16)
-            slider.setFixedWidth(140)
-            slider.setMinimum(30)
-            slider.setMaximum(300)
-            slider.setValue(120)
-            slider.valueChanged.connect(lambda val, idx=i: self._on_seq_freq_changed(idx, val))
-            grid.addWidget(slider, row1, COL1 + 1)
-            value = QLabel("120")
-            value.setFixedWidth(25)
-            grid.addWidget(value, row1, COL1 + 2)
-            self.seq_freq_sliders.append((slider, value))
-            row1 += 1
+        # Unified Clock BPM (統一時鐘)
+        grid.addWidget(QLabel("Clock BPM"), row1, COL1)
+        slider = QSlider(Qt.Orientation.Horizontal)
+        slider.setFixedHeight(16)
+        slider.setFixedWidth(140)
+        slider.setMinimum(1)
+        slider.setMaximum(999)
+        slider.setValue(120)
+        slider.valueChanged.connect(self._on_clock_rate_changed)
+        grid.addWidget(slider, row1, COL1 + 1)
+        value = QLabel("120")
+        value.setFixedWidth(35)
+        grid.addWidget(value, row1, COL1 + 2)
+        self.clock_slider = (slider, value)
+        row1 += 1
+
+        # Anchor X
+        grid.addWidget(QLabel("Anchor X"), row1, COL1)
+        slider = QSlider(Qt.Orientation.Horizontal)
+        slider.setFixedHeight(16)
+        slider.setFixedWidth(140)
+        slider.setMinimum(0)
+        slider.setMaximum(100)
+        slider.setValue(50)
+        slider.valueChanged.connect(self._on_anchor_x_changed)
+        grid.addWidget(slider, row1, COL1 + 1)
+        value = QLabel("50%")
+        value.setFixedWidth(35)
+        grid.addWidget(value, row1, COL1 + 2)
+        self.anchor_x_slider = (slider, value)
+        row1 += 1
+
+        # Anchor Y
+        grid.addWidget(QLabel("Anchor Y"), row1, COL1)
+        slider = QSlider(Qt.Orientation.Horizontal)
+        slider.setFixedHeight(16)
+        slider.setFixedWidth(140)
+        slider.setMinimum(0)
+        slider.setMaximum(100)
+        slider.setValue(50)
+        slider.valueChanged.connect(self._on_anchor_y_changed)
+        grid.addWidget(slider, row1, COL1 + 1)
+        value = QLabel("50%")
+        value.setFixedWidth(35)
+        grid.addWidget(value, row1, COL1 + 2)
+        self.anchor_y_slider = (slider, value)
+        row1 += 1
+
+        # Range
+        grid.addWidget(QLabel("Range"), row1, COL1)
+        slider = QSlider(Qt.Orientation.Horizontal)
+        slider.setFixedHeight(16)
+        slider.setFixedWidth(140)
+        slider.setMinimum(0)
+        slider.setMaximum(50)
+        slider.setValue(50)
+        slider.valueChanged.connect(self._on_range_changed)
+        grid.addWidget(slider, row1, COL1 + 1)
+        value = QLabel("50%")
+        value.setFixedWidth(35)
+        grid.addWidget(value, row1, COL1 + 2)
+        self.range_slider = (slider, value)
+        row1 += 1
+
+        # Edge Threshold
+        grid.addWidget(QLabel("Threshold"), row1, COL1)
+        slider = QSlider(Qt.Orientation.Horizontal)
+        slider.setFixedHeight(16)
+        slider.setFixedWidth(140)
+        slider.setMinimum(0)
+        slider.setMaximum(255)
+        slider.setValue(50)
+        slider.valueChanged.connect(self._on_threshold_changed)
+        grid.addWidget(slider, row1, COL1 + 1)
+        value = QLabel("50")
+        value.setFixedWidth(35)
+        grid.addWidget(value, row1, COL1 + 2)
+        self.threshold_slider = (slider, value)
+        row1 += 1
+
+        # Smoothing
+        grid.addWidget(QLabel("Smoothing"), row1, COL1)
+        slider = QSlider(Qt.Orientation.Horizontal)
+        slider.setFixedHeight(16)
+        slider.setFixedWidth(140)
+        slider.setMinimum(0)
+        slider.setMaximum(100)
+        slider.setValue(50)
+        slider.valueChanged.connect(self._on_smoothing_changed)
+        grid.addWidget(slider, row1, COL1 + 1)
+        value = QLabel("50")
+        value.setFixedWidth(35)
+        grid.addWidget(value, row1, COL1 + 2)
+        self.smoothing_slider = (slider, value)
+        row1 += 1
 
         # Min Length
         grid.addWidget(QLabel("Min Length"), row1, COL1)
@@ -677,10 +760,9 @@ class CompactMainWindow(QMainWindow):
 
         # Compact sliders for SEQs
         self.seq_steps_spinners = []
-        self.seq_freq_sliders = []
 
         for i in range(2):
-            row = 3 + i * 2
+            row = 3 + i
 
             # Steps
             label = QLabel(f"S{i+1}St")
@@ -689,11 +771,11 @@ class CompactMainWindow(QMainWindow):
             slider.setFixedHeight(18)
             slider.setMinimum(4)
             slider.setMaximum(32)
-            slider.setValue(16)
+            slider.setValue(8)
             slider.valueChanged.connect(
                 lambda val, idx=i: self._on_seq_steps_changed(idx, val)
             )
-            value = QLabel("16")
+            value = QLabel("8")
             value.setFixedWidth(25)
             self.seq_steps_spinners.append((slider, value))
 
@@ -701,24 +783,101 @@ class CompactMainWindow(QMainWindow):
             layout.addWidget(slider, row, 1)
             layout.addWidget(value, row, 2)
 
-            # Freq
-            label = QLabel(f"S{i+1}Freq")
-            label.setFixedWidth(30)
-            slider = QSlider(Qt.Orientation.Horizontal)
-            slider.setFixedHeight(18)
-            slider.setMinimum(30)
-            slider.setMaximum(300)
-            slider.setValue(120)
-            slider.valueChanged.connect(
-                lambda val, idx=i: self._on_seq_freq_changed(idx, val)
-            )
-            value = QLabel("120")
-            value.setFixedWidth(25)
-            self.seq_freq_sliders.append((slider, value))
+        # Unified Clock BPM
+        label = QLabel("BPM")
+        label.setFixedWidth(30)
+        slider = QSlider(Qt.Orientation.Horizontal)
+        slider.setFixedHeight(18)
+        slider.setMinimum(1)
+        slider.setMaximum(999)
+        slider.setValue(120)
+        slider.valueChanged.connect(self._on_clock_rate_changed)
+        value = QLabel("120")
+        value.setFixedWidth(25)
+        self.clock_slider = (slider, value)
+        layout.addWidget(label, 5, 0)
+        layout.addWidget(slider, 5, 1)
+        layout.addWidget(value, 5, 2)
 
-            layout.addWidget(label, row + 1, 0)
-            layout.addWidget(slider, row + 1, 1)
-            layout.addWidget(value, row + 1, 2)
+        # Anchor X
+        label = QLabel("AncX")
+        label.setFixedWidth(30)
+        slider = QSlider(Qt.Orientation.Horizontal)
+        slider.setFixedHeight(18)
+        slider.setMinimum(0)
+        slider.setMaximum(100)
+        slider.setValue(50)
+        slider.valueChanged.connect(self._on_anchor_x_changed)
+        value = QLabel("50%")
+        value.setFixedWidth(25)
+        self.anchor_x_slider = (slider, value)
+        layout.addWidget(label, 6, 0)
+        layout.addWidget(slider, 6, 1)
+        layout.addWidget(value, 6, 2)
+
+        # Anchor Y
+        label = QLabel("AncY")
+        label.setFixedWidth(30)
+        slider = QSlider(Qt.Orientation.Horizontal)
+        slider.setFixedHeight(18)
+        slider.setMinimum(0)
+        slider.setMaximum(100)
+        slider.setValue(50)
+        slider.valueChanged.connect(self._on_anchor_y_changed)
+        value = QLabel("50%")
+        value.setFixedWidth(25)
+        self.anchor_y_slider = (slider, value)
+        layout.addWidget(label, 7, 0)
+        layout.addWidget(slider, 7, 1)
+        layout.addWidget(value, 7, 2)
+
+        # Range
+        label = QLabel("Rng")
+        label.setFixedWidth(30)
+        slider = QSlider(Qt.Orientation.Horizontal)
+        slider.setFixedHeight(18)
+        slider.setMinimum(0)
+        slider.setMaximum(50)
+        slider.setValue(50)
+        slider.valueChanged.connect(self._on_range_changed)
+        value = QLabel("50%")
+        value.setFixedWidth(25)
+        self.range_slider = (slider, value)
+        layout.addWidget(label, 8, 0)
+        layout.addWidget(slider, 8, 1)
+        layout.addWidget(value, 8, 2)
+
+        # Edge Threshold
+        label = QLabel("Thrs")
+        label.setFixedWidth(30)
+        slider = QSlider(Qt.Orientation.Horizontal)
+        slider.setFixedHeight(18)
+        slider.setMinimum(0)
+        slider.setMaximum(255)
+        slider.setValue(50)
+        slider.valueChanged.connect(self._on_threshold_changed)
+        value = QLabel("50")
+        value.setFixedWidth(25)
+        self.threshold_slider = (slider, value)
+        layout.addWidget(label, 9, 0)
+        layout.addWidget(slider, 9, 1)
+        layout.addWidget(value, 9, 2)
+
+        # Smoothing
+        label = QLabel("Smth")
+        label.setFixedWidth(30)
+        slider = QSlider(Qt.Orientation.Horizontal)
+        slider.setFixedHeight(18)
+        slider.setMinimum(0)
+        slider.setMaximum(100)
+        slider.setValue(50)
+        slider.valueChanged.connect(self._on_smoothing_changed)
+        value = QLabel("50")
+        value.setFixedWidth(25)
+        self.smoothing_slider = (slider, value)
+        layout.addWidget(label, 10, 0)
+        layout.addWidget(slider, 10, 1)
+        layout.addWidget(value, 10, 2)
 
         return widget
 
@@ -890,13 +1049,47 @@ class CompactMainWindow(QMainWindow):
         label.setText(f"{decay_time:.2f}s")
 
     def _on_seq_steps_changed(self, seq_idx: int, value: int):
-        self.controller.set_sequencer_params(seq_idx, num_steps=value)
+        # Note: Num steps is now controlled by ContourCVGenerator parameters
+        # This is kept for backward compatibility but may not be used
         _, label = self.seq_steps_spinners[seq_idx]
         label.setText(str(value))
 
-    def _on_seq_freq_changed(self, seq_idx: int, value: int):
-        self.controller.set_sequencer_params(seq_idx, clock_rate=float(value))
-        _, label = self.seq_freq_sliders[seq_idx]
+    def _on_clock_rate_changed(self, value: int):
+        """Unified clock rate for both SEQ1 and SEQ2"""
+        self.controller.set_cv_clock_rate(float(value))
+        _, label = self.clock_slider
+        label.setText(str(value))
+
+    def _on_anchor_x_changed(self, value: int):
+        """Anchor X position (0-100%)"""
+        anchor_y_slider, _ = self.anchor_y_slider
+        self.controller.set_anchor_position(float(value), float(anchor_y_slider.value()))
+        _, label = self.anchor_x_slider
+        label.setText(f"{value}%")
+
+    def _on_anchor_y_changed(self, value: int):
+        """Anchor Y position (0-100%)"""
+        anchor_x_slider, _ = self.anchor_x_slider
+        self.controller.set_anchor_position(float(anchor_x_slider.value()), float(value))
+        _, label = self.anchor_y_slider
+        label.setText(f"{value}%")
+
+    def _on_range_changed(self, value: int):
+        """Sampling range from anchor (0-50%)"""
+        self.controller.set_cv_range(float(value))
+        _, label = self.range_slider
+        label.setText(f"{value}%")
+
+    def _on_threshold_changed(self, value: int):
+        """Edge detection threshold (0-255)"""
+        self.controller.set_edge_threshold(value)
+        _, label = self.threshold_slider
+        label.setText(str(value))
+
+    def _on_smoothing_changed(self, value: int):
+        """Temporal smoothing (0-100)"""
+        self.controller.set_cv_smoothing(value)
+        _, label = self.smoothing_slider
         label.setText(str(value))
 
     def _on_mixer_volume(self, track: int, value: float):
@@ -1203,6 +1396,7 @@ class CompactMainWindow(QMainWindow):
 
     def _update_cv_display(self, cv_values: np.ndarray):
         self.scope_widget.add_samples(cv_values)
+        self.cv_meter_window.update_values(cv_values)
 
     def _update_visual_display(self, visual_params: dict):
         pass

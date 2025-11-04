@@ -9,8 +9,7 @@ import time
 import cv2
 
 from ..vision.camera import Camera
-from ..vision.cable_detector import CableDetector
-from ..vision.analyzer import CableAnalyzer
+from ..cv_generator.contour_cv import ContourCVGenerator
 from ..cv_generator.envelope import DecayEnvelope
 from ..cv_generator.sequencer import SequenceCV
 from ..audio.io import AudioIO
@@ -52,10 +51,9 @@ class VAVController:
 
         # Vision system
         self.camera: Optional[Camera] = None
-        self.cable_detector: Optional[CableDetector] = None
-        self.cable_analyzer: Optional[CableAnalyzer] = None
+        self.contour_cv_generator: Optional[ContourCVGenerator] = None
         self.current_frame: Optional[np.ndarray] = None
-        self.current_cables = []
+        self.edges: Optional[np.ndarray] = None  # Edge detection results
 
         # Virtual camera output
         self.virtual_camera = None
@@ -132,12 +130,8 @@ class VAVController:
             print("Failed to open camera")
             return False
 
-        self.cable_detector = CableDetector(
-            min_length=50,
-            max_cables=32,
-        )
-
-        self.cable_analyzer = CableAnalyzer()
+        # Initialize Contour CV Generator (replaces cable detection)
+        self.contour_cv_generator = ContourCVGenerator()
 
         # Initialize Multiverse renderer (Numba JIT > GPU > CPU)
         import platform
@@ -364,25 +358,35 @@ class VAVController:
 
             self.current_frame = frame
 
-            # Detect cables (expensive operation)
-            cables = self.cable_detector.detect(frame)
-            self.current_cables = cables
+            # Convert to grayscale for edge detection
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-            # Analyze cables → trigger CV events
-            self._process_cable_analysis(cables)
+            # Generate sequence values from edge detection
+            self.contour_cv_generator.sample_edge_sequences(gray)
 
-            # Update CV values at consistent rate
+            # Update CV sequencer and trigger envelopes
             current_time = time.time()
             if current_time - last_cv_update >= cv_update_time:
+                dt = current_time - last_cv_update
+                self.contour_cv_generator.update_sequencer_and_triggers(
+                    dt, frame.shape[1], frame.shape[0], self.envelopes
+                )
                 self._update_cv_values()
                 last_cv_update = current_time
 
+            # Detect contours for visualization
+            contours, edges = self.contour_cv_generator.detect_contours(gray)
+            self.edges = edges
+
+            # Update trigger ring animations
+            self.contour_cv_generator.update_trigger_rings()
+
             # Generate visualization frame (for both GUI and virtual camera)
-            display_frame = self._draw_visualization(frame, cables)
+            display_frame = self._draw_visualization(frame, contours)
 
             # Callback for GUI frame update (send visualization, not raw frame)
             if self.frame_callback:
-                self.frame_callback(display_frame, cables)
+                self.frame_callback(display_frame, contours)
 
             # Output to virtual camera if enabled
             if self.virtual_camera_enabled and self.virtual_camera is not None:
@@ -402,38 +406,20 @@ class VAVController:
             if sleep_time > 0:
                 time.sleep(sleep_time)
 
-    def _draw_visualization(self, frame, cables):
-        """Draw visualization of detected cables on frame"""
+    def _draw_visualization(self, frame, contours):
+        """Draw visualization using ContourCVGenerator overlay"""
         if self.use_multiverse_rendering:
-            return self._render_multiverse(frame, cables)
+            return self._render_multiverse(frame, contours)
         else:
-            return self._render_simple(frame, cables)
+            return self._render_simple(frame, contours)
 
-    def _render_simple(self, frame, cables):
-        """Simple visualization: draw detected cables with varying thickness"""
-        display_frame = frame.copy()
-        cv_values = self.cv_values.copy()
-
-        # Draw cables with line thickness based on envelope values
-        for idx, cable in enumerate(cables):
-            # Map cable index to envelope (cycle through 3 envelopes)
-            color_idx = idx % 3
-            env_val = cv_values[color_idx] if color_idx < 3 else 0
-
-            # Line thickness varies with envelope value
-            line_thickness = 4 if env_val > 0.1 else 1
-
-            # Draw line
-            cv2.line(display_frame, cable.start, cable.end, (255, 255, 255), line_thickness)
-            # Draw endpoints
-            cv2.circle(display_frame, cable.start, 3, (255, 255, 255), -1)
-            cv2.circle(display_frame, cable.end, 3, (255, 255, 255), -1)
-
-        # Add cable count text
-        height, width = display_frame.shape[:2]
-        cv2.putText(display_frame, f"Cables: {len(cables)}", (20, height - 20),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-
+    def _render_simple(self, frame, contours):
+        """Simple visualization: use ContourCVGenerator overlay"""
+        # Use ContourCVGenerator's draw_overlay method
+        display_frame = self.contour_cv_generator.draw_overlay(
+            frame, self.edges if self.edges is not None else np.zeros_like(frame[:,:,0]),
+            envelopes=self.envelopes
+        )
         return display_frame
 
     def _render_multiverse(self, frame, cables):
@@ -593,21 +579,31 @@ class VAVController:
         if self.cv_callback:
             self.cv_callback(self.cv_values.copy())
 
-    def _process_cable_analysis(self, cables):
-        """Process cable data and trigger CV generators"""
-        # Envelope triggers (based on cable count changes)
-        triggers = self.cable_analyzer.get_envelope_triggers(cables, num_envelopes=3)
-        for i, triggered in enumerate(triggers):
-            if triggered and i < len(self.envelopes):
-                self.envelopes[i].trigger()
+    # Contour CV controls (replacing cable analysis)
+    def set_anchor_position(self, x_pct: float, y_pct: float):
+        """Set anchor position for edge detection (0-100%)"""
+        if self.contour_cv_generator:
+            self.contour_cv_generator.set_anchor_position(x_pct, y_pct)
 
-        # Sequence values (SEQ 1: positions, SEQ 2: lengths)
-        for i, seq in enumerate(self.sequencers):
-            use_lengths = (i == 1)  # SEQ 2 uses lengths, SEQ 1 uses positions
-            values = self.cable_analyzer.get_sequence_values(
-                cables, num_steps=seq.num_steps, use_lengths=use_lengths
-            )
-            seq.set_sequence_from_positions(values)
+    def set_cv_range(self, range_pct: float):
+        """Set sampling range from anchor (0-50%)"""
+        if self.contour_cv_generator:
+            self.contour_cv_generator.set_range(range_pct)
+
+    def set_edge_threshold(self, threshold: int):
+        """Set edge detection threshold (0-255)"""
+        if self.contour_cv_generator:
+            self.contour_cv_generator.set_edge_threshold(threshold)
+
+    def set_cv_smoothing(self, smoothing: int):
+        """Set temporal smoothing (0-100)"""
+        if self.contour_cv_generator:
+            self.contour_cv_generator.set_smoothing(smoothing)
+
+    def set_cv_clock_rate(self, bpm: float):
+        """Set unified clock rate for SEQ1 and SEQ2 (1-999 BPM)"""
+        if self.contour_cv_generator:
+            self.contour_cv_generator.set_clock_rate(bpm)
 
     def _update_audio_buffers(self, indata: np.ndarray):
         """Update audio buffers for Multiverse rendering with frequency detection"""
