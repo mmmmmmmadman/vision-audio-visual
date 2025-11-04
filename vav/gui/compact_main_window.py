@@ -14,7 +14,7 @@ import cv2
 
 from .scope_widget import ScopeWidget
 from .device_dialog import DeviceSelectionDialog
-from .cv_meter_window import CVMeterWindow
+from .anchor_xy_pad import AnchorXYPad
 from ..core.controller import VAVController
 
 
@@ -44,10 +44,6 @@ class CompactMainWindow(QMainWindow):
 
         # Build UI
         self._build_ui()
-
-        # CV Meter Window (獨立視窗)
-        self.cv_meter_window = CVMeterWindow()
-        self.cv_meter_window.show()
 
         # Status bar
         self.status_label = QLabel("Ready")
@@ -159,23 +155,20 @@ class CompactMainWindow(QMainWindow):
         # ===== COLUMN 1: CV Source =====
         row1 = 0
 
-        # ENV 1-3
-        self.env_sliders = []
-        for i in range(3):
-            grid.addWidget(QLabel(f"ENV {i+1} Decay"), row1, COL1)
-            slider = QSlider(Qt.Orientation.Horizontal)
-            slider.setFixedHeight(16)
-            slider.setFixedWidth(140)
-            slider.setMinimum(10)
-            slider.setMaximum(10000)
-            slider.setValue(1000)
-            slider.valueChanged.connect(lambda val, idx=i: self._on_env_decay_changed(idx, val))
-            grid.addWidget(slider, row1, COL1 + 1)
-            value_label = QLabel("1.0s")
-            value_label.setFixedWidth(35)
-            grid.addWidget(value_label, row1, COL1 + 2)
-            self.env_sliders.append((slider, value_label))
-            row1 += 1
+        # ENV Global Decay (exponential: 0.1~1s, 1~5s)
+        grid.addWidget(QLabel("ENV Global Decay"), row1, COL1)
+        self.env_global_slider = QSlider(Qt.Orientation.Horizontal)
+        self.env_global_slider.setFixedHeight(16)
+        self.env_global_slider.setFixedWidth(140)
+        self.env_global_slider.setMinimum(0)
+        self.env_global_slider.setMaximum(100)
+        self.env_global_slider.setValue(50)
+        self.env_global_slider.valueChanged.connect(self._on_env_global_decay_changed)
+        grid.addWidget(self.env_global_slider, row1, COL1 + 1)
+        self.env_global_label = QLabel("1.0s")
+        self.env_global_label.setFixedWidth(35)
+        grid.addWidget(self.env_global_label, row1, COL1 + 2)
+        row1 += 1
 
         # SEQ 1-2 Steps
         self.seq_steps_spinners = []
@@ -209,38 +202,6 @@ class CompactMainWindow(QMainWindow):
         value.setFixedWidth(35)
         grid.addWidget(value, row1, COL1 + 2)
         self.clock_slider = (slider, value)
-        row1 += 1
-
-        # Anchor X
-        grid.addWidget(QLabel("Anchor X"), row1, COL1)
-        slider = QSlider(Qt.Orientation.Horizontal)
-        slider.setFixedHeight(16)
-        slider.setFixedWidth(140)
-        slider.setMinimum(0)
-        slider.setMaximum(100)
-        slider.setValue(50)
-        slider.valueChanged.connect(self._on_anchor_x_changed)
-        grid.addWidget(slider, row1, COL1 + 1)
-        value = QLabel("50%")
-        value.setFixedWidth(35)
-        grid.addWidget(value, row1, COL1 + 2)
-        self.anchor_x_slider = (slider, value)
-        row1 += 1
-
-        # Anchor Y
-        grid.addWidget(QLabel("Anchor Y"), row1, COL1)
-        slider = QSlider(Qt.Orientation.Horizontal)
-        slider.setFixedHeight(16)
-        slider.setFixedWidth(140)
-        slider.setMinimum(0)
-        slider.setMaximum(100)
-        slider.setValue(50)
-        slider.valueChanged.connect(self._on_anchor_y_changed)
-        grid.addWidget(slider, row1, COL1 + 1)
-        value = QLabel("50%")
-        value.setFixedWidth(35)
-        grid.addWidget(value, row1, COL1 + 2)
-        self.anchor_y_slider = (slider, value)
         row1 += 1
 
         # Range
@@ -729,6 +690,20 @@ class CompactMainWindow(QMainWindow):
         self.er_chaos_shape_checkbox = QCheckBox("Chaos Shape")
         self.er_chaos_shape_checkbox.stateChanged.connect(self._on_er_chaos_shape_changed)
         grid.addWidget(self.er_chaos_shape_checkbox, row6, COL6, 1, 3)
+        row6 += 1
+
+        # Anchor XY Pad (below column 6)
+        grid.addWidget(QLabel("Anchor XY"), row6, COL6)
+        row6 += 1
+
+        self.anchor_xy_pad = AnchorXYPad()
+        self.anchor_xy_pad.position_changed.connect(self._on_anchor_xy_changed)
+        grid.addWidget(self.anchor_xy_pad, row6, COL6, 3, 3)  # Span 3 rows, 3 columns
+
+        # Position labels below pad
+        row6 += 3
+        self.anchor_xy_label = QLabel("X: 50%  Y: 50%")
+        grid.addWidget(self.anchor_xy_label, row6, COL6, 1, 3)
 
     def _build_cv_column(self) -> QWidget:
         """Build CV controls column"""
@@ -1042,11 +1017,24 @@ class CompactMainWindow(QMainWindow):
             self.video_window.show()
             self.show_video_btn.setText("Hide Video")
 
-    def _on_env_decay_changed(self, env_idx: int, value: int):
-        decay_time = value / 1000.0
-        self.controller.set_envelope_decay(env_idx, decay_time)
-        _, label = self.env_sliders[env_idx]
-        label.setText(f"{decay_time:.2f}s")
+    def _on_env_global_decay_changed(self, value: int):
+        """Global ENV decay with exponential mapping
+        0-50: 0.1s ~ 1s
+        50-100: 1s ~ 5s
+        """
+        import numpy as np
+        if value <= 50:
+            # First half: exponential 0.1 ~ 1.0
+            t = value / 50.0
+            decay_time = 0.1 * (10.0 ** t)
+        else:
+            # Second half: exponential 1.0 ~ 5.0
+            t = (value - 50) / 50.0
+            decay_time = 1.0 * (5.0 ** t)
+
+        # Set all envelopes
+        self.controller.set_global_env_decay(decay_time)
+        self.env_global_label.setText(f"{decay_time:.2f}s")
 
     def _on_seq_steps_changed(self, seq_idx: int, value: int):
         # Note: Num steps is now controlled by ContourCVGenerator parameters
@@ -1060,19 +1048,10 @@ class CompactMainWindow(QMainWindow):
         _, label = self.clock_slider
         label.setText(str(value))
 
-    def _on_anchor_x_changed(self, value: int):
-        """Anchor X position (0-100%)"""
-        anchor_y_slider, _ = self.anchor_y_slider
-        self.controller.set_anchor_position(float(value), float(anchor_y_slider.value()))
-        _, label = self.anchor_x_slider
-        label.setText(f"{value}%")
-
-    def _on_anchor_y_changed(self, value: int):
-        """Anchor Y position (0-100%)"""
-        anchor_x_slider, _ = self.anchor_x_slider
-        self.controller.set_anchor_position(float(anchor_x_slider.value()), float(value))
-        _, label = self.anchor_y_slider
-        label.setText(f"{value}%")
+    def _on_anchor_xy_changed(self, x_pct: float, y_pct: float):
+        """Anchor XY position changed from 2D pad"""
+        self.controller.set_anchor_position(x_pct, y_pct)
+        self.anchor_xy_label.setText(f"X: {x_pct:.0f}%  Y: {y_pct:.0f}%")
 
     def _on_range_changed(self, value: int):
         """Sampling range from anchor (0-50%)"""
@@ -1396,7 +1375,7 @@ class CompactMainWindow(QMainWindow):
 
     def _update_cv_display(self, cv_values: np.ndarray):
         self.scope_widget.add_samples(cv_values)
-        self.cv_meter_window.update_values(cv_values)
+        # CV Meter Window removed - use Scope Widget instead
 
     def _update_visual_display(self, visual_params: dict):
         pass

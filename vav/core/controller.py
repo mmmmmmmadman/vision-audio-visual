@@ -725,6 +725,11 @@ class VAVController:
         if 0 <= env_idx < len(self.envelopes):
             self.envelopes[env_idx].set_decay_time(decay_time)
 
+    def set_global_env_decay(self, decay_time: float):
+        """Set decay time for all envelopes"""
+        for env in self.envelopes:
+            env.set_decay_time(decay_time)
+
     def set_sequencer_params(self, seq_idx: int, num_steps: int = None,
                             clock_rate: float = None):
         """Set sequencer parameters"""
