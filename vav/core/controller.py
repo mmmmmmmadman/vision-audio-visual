@@ -19,6 +19,7 @@ from ..audio.analysis import AudioAnalyzer
 from ..visual.gpu_renderer import GPUMultiverseRenderer
 from ..visual.qt_opengl_renderer import QtMultiverseRenderer
 from ..visual.content_aware_regions import ContentAwareRegionMapper
+from ..visual.sd_img2img_process import SDImg2ImgProcess
 
 # Try Numba JIT renderer (best performance on macOS)
 try:
@@ -98,6 +99,10 @@ class VAVController:
         self.ellen_ripley: Optional[EllenRipleyEffectChain] = None
         self.ellen_ripley_enabled = False
 
+
+        # SD img2img integration
+        self.sd_img2img: Optional[SDImg2ImgProcess] = None
+        self.sd_enabled = False
         # Visual parameters (from audio analysis)
         self.visual_params = {
             "brightness": 0.5,
@@ -925,3 +930,46 @@ class VAVController:
             print(f"Region mode set to: {mode}")
         else:
             print(f"Invalid region mode: {mode}. Valid modes: brightness, color, quadrant, edge")
+    # SD img2img controls
+    def set_sd_enabled(self, enabled: bool):
+        """Enable/disable SD img2img"""
+        self.sd_enabled = enabled
+        if enabled:
+            if not self.sd_img2img:
+                print("[Controller] Initializing SD img2img...")
+                self.sd_img2img = SDImg2ImgProcess(
+                    output_width=1280,
+                    output_height=720,
+                    fps_target=30
+                )
+                self.sd_img2img.start()
+                print("[Controller] SD img2img started")
+        else:
+            if self.sd_img2img:
+                print("[Controller] Stopping SD img2img...")
+                self.sd_img2img.stop()
+                self.sd_img2img = None
+                print("[Controller] SD img2img stopped")
+
+    def set_sd_prompt(self, prompt: str):
+        """Set SD prompt"""
+        if self.sd_img2img:
+            self.sd_img2img.set_prompt(prompt)
+        else:
+            print("[Controller] SD img2img not initialized")
+
+    def set_sd_parameters(self, strength: float = None, guidance_scale: float = None,
+                         num_steps: int = None):
+        """Set SD generation parameters"""
+        if self.sd_img2img:
+            self.sd_img2img.set_parameters(strength, guidance_scale, num_steps)
+        else:
+            print("[Controller] SD img2img not initialized")
+
+    def set_sd_interval(self, interval: float):
+        """Set SD generation interval"""
+        if self.sd_img2img:
+            self.sd_img2img.send_interval = interval
+            print(f"[Controller] SD generation interval set to {interval}s")
+        else:
+            print("[Controller] SD img2img not initialized")

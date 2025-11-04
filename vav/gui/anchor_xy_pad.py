@@ -19,10 +19,12 @@ class AnchorXYPad(QWidget):
         self.y_pct = 50.0  # 0-100
         self.dragging = False
 
-        # Fixed size
-        self.setMinimumSize(140, 140)
-        self.setMaximumSize(140, 140)
-        self.setFixedSize(140, 140)
+        # Fixed size: 1.3x larger, 16:9 aspect ratio (matching main visual)
+        # Original: 140x140, scaled 1.3x = 182x182
+        # 16:9 ratio: width=182, height=102 (182 * 9/16)
+        self.setMinimumSize(182, 102)
+        self.setMaximumSize(182, 102)
+        self.setFixedSize(182, 102)
 
         # Enable mouse tracking
         self.setMouseTracking(True)

@@ -5,7 +5,7 @@ Compact Main GUI window for VAV system - optimized layout
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QSlider, QGroupBox, QGridLayout,
-    QComboBox, QCheckBox,
+    QComboBox, QCheckBox, QTextEdit, QLineEdit,
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QImage, QPixmap
@@ -109,10 +109,10 @@ class CompactMainWindow(QMainWindow):
         controls_grid.setVerticalSpacing(18)    # 9x vertical spacing (3x3)
         controls_grid.setHorizontalSpacing(10)  # 2x horizontal spacing
         controls_grid.setContentsMargins(5, 5, 5, 5)
-        # 6 visual columns x 3 grid columns each = 18 columns + 1 stretch
-        for i in range(18):
+        # 5 visual columns x 3 grid columns each = 15 columns + 1 stretch
+        for i in range(15):
             controls_grid.setColumnStretch(i, 0)  # No stretch for control columns
-        controls_grid.setColumnStretch(18, 1)  # Stretch remainder
+        controls_grid.setColumnStretch(15, 1)  # Stretch remainder
         self._build_all_controls_inline(controls_grid)
 
         main_layout.addWidget(controls_widget)
@@ -128,15 +128,14 @@ class CompactMainWindow(QMainWindow):
         video_layout.addWidget(self.video_label)
 
     def _build_all_controls_inline(self, grid: QGridLayout):
-        """Build all controls in 6-column layout"""
+        """Build all controls in 5-column layout"""
 
         # Column positions (each visual column uses 3 grid columns)
-        COL1 = 0   # CV Source
-        COL2 = 3   # Mixer
-        COL3 = 6   # Multiverse Main
-        COL4 = 9   # Multiverse Channels
-        COL5 = 12  # Ellen Ripley Delay+Grain
-        COL6 = 15  # Ellen Ripley Reverb+Chaos
+        COL1 = 0   # CV Source + Mixer
+        COL2 = 3   # Multiverse Main
+        COL3 = 6   # Multiverse Channels + SD img2img
+        COL4 = 9   # Ellen Ripley Delay+Grain
+        COL5 = 12  # Ellen Ripley Reverb+Chaos
 
         # ===== COLUMN 1: CV Source =====
         row1 = 0
@@ -253,47 +252,46 @@ class CompactMainWindow(QMainWindow):
         grid.addWidget(self.min_length_label, row1, COL1 + 2)
         row1 += 1
 
-        # ===== COLUMN 2: Mixer =====
-        row2 = 0
+        # Mixer (moved from COL2)
         self.mixer_sliders = []
         for i in range(4):
-            grid.addWidget(QLabel(f"Track {i+1} Vol"), row2, COL2)
+            grid.addWidget(QLabel(f"Track {i+1} Vol"), row1, COL1)
             mix_slider = QSlider(Qt.Orientation.Horizontal)
             mix_slider.setFixedHeight(16)
-            mix_slider.setFixedWidth(120)
+            mix_slider.setFixedWidth(140)
             mix_slider.setMinimum(0)
             mix_slider.setMaximum(100)
             mix_slider.setValue(80)
             mix_slider.valueChanged.connect(lambda val, idx=i: self._on_mixer_volume(idx, val / 100.0))
-            grid.addWidget(mix_slider, row2, COL2 + 1)
+            grid.addWidget(mix_slider, row1, COL1 + 1)
             mix_label = QLabel("0.8")
             mix_label.setFixedWidth(25)
-            grid.addWidget(mix_label, row2, COL2 + 2)
+            grid.addWidget(mix_label, row1, COL1 + 2)
             self.mixer_sliders.append((mix_slider, mix_label))
-            row2 += 1
+            row1 += 1
 
-        # ===== COLUMN 3: Multiverse Main =====
-        row3 = 0
+        # ===== COLUMN 2: Multiverse Main =====
+        row2 = 0
 
         # Enable
         self.multiverse_checkbox = QCheckBox("Multiverse")
         self.multiverse_checkbox.setChecked(False)
         self.multiverse_checkbox.stateChanged.connect(self._on_multiverse_toggle)
-        grid.addWidget(self.multiverse_checkbox, row3, COL3, 1, 2)
-        row3 += 1
+        grid.addWidget(self.multiverse_checkbox, row2, COL2, 1, 2)
+        row2 += 1
 
         # Blend mode
-        grid.addWidget(QLabel("Blend"), row3, COL3)
+        grid.addWidget(QLabel("Blend"), row2, COL2)
         self.blend_mode_combo = QComboBox()
         self.blend_mode_combo.addItems(["Add", "Scrn", "Diff", "Dodg"])
         self.blend_mode_combo.setFixedHeight(20)
         self.blend_mode_combo.setFixedWidth(120)
         self.blend_mode_combo.currentIndexChanged.connect(self._on_blend_mode_changed)
-        grid.addWidget(self.blend_mode_combo, row3, COL3 + 1, 1, 2)
-        row3 += 1
+        grid.addWidget(self.blend_mode_combo, row2, COL2 + 1, 1, 2)
+        row2 += 1
 
         # Brightness
-        grid.addWidget(QLabel("Brightness"), row3, COL3)
+        grid.addWidget(QLabel("Brightness"), row2, COL2)
         self.brightness_slider = QSlider(Qt.Orientation.Horizontal)
         self.brightness_slider.setFixedHeight(16)
         self.brightness_slider.setFixedWidth(120)
@@ -301,14 +299,14 @@ class CompactMainWindow(QMainWindow):
         self.brightness_slider.setMaximum(400)
         self.brightness_slider.setValue(250)
         self.brightness_slider.valueChanged.connect(self._on_brightness_changed)
-        grid.addWidget(self.brightness_slider, row3, COL3 + 1)
+        grid.addWidget(self.brightness_slider, row2, COL2 + 1)
         self.brightness_label = QLabel("2.5")
         self.brightness_label.setFixedWidth(25)
-        grid.addWidget(self.brightness_label, row3, COL3 + 2)
-        row3 += 1
+        grid.addWidget(self.brightness_label, row2, COL2 + 2)
+        row2 += 1
 
         # Camera Mix
-        grid.addWidget(QLabel("Camera Mix"), row3, COL3)
+        grid.addWidget(QLabel("Camera Mix"), row2, COL2)
         self.camera_mix_slider = QSlider(Qt.Orientation.Horizontal)
         self.camera_mix_slider.setFixedHeight(16)
         self.camera_mix_slider.setFixedWidth(120)
@@ -316,38 +314,109 @@ class CompactMainWindow(QMainWindow):
         self.camera_mix_slider.setMaximum(100)
         self.camera_mix_slider.setValue(0)  # Default: pure multiverse
         self.camera_mix_slider.valueChanged.connect(self._on_camera_mix_changed)
-        grid.addWidget(self.camera_mix_slider, row3, COL3 + 1)
+        grid.addWidget(self.camera_mix_slider, row2, COL2 + 1)
         self.camera_mix_label = QLabel("0.0")
         self.camera_mix_label.setFixedWidth(25)
-        grid.addWidget(self.camera_mix_label, row3, COL3 + 2)
-        row3 += 1
+        grid.addWidget(self.camera_mix_label, row2, COL2 + 2)
+        row2 += 1
 
         # Region Rendering
         self.region_rendering_checkbox = QCheckBox("Region Map")
         self.region_rendering_checkbox.setChecked(False)
         self.region_rendering_checkbox.stateChanged.connect(self._on_region_rendering_toggle)
-        grid.addWidget(self.region_rendering_checkbox, row3, COL3, 1, 2)
-        row3 += 1
+        grid.addWidget(self.region_rendering_checkbox, row2, COL2, 1, 2)
+        row2 += 1
 
         # Region Mode
-        grid.addWidget(QLabel("Region Mode"), row3, COL3)
+        grid.addWidget(QLabel("Region Mode"), row2, COL2)
         self.region_mode_combo = QComboBox()
         self.region_mode_combo.addItems(["Bright", "Color", "Quad", "Edge"])
         self.region_mode_combo.setFixedHeight(20)
         self.region_mode_combo.setFixedWidth(120)
         self.region_mode_combo.currentIndexChanged.connect(self._on_region_mode_changed)
-        grid.addWidget(self.region_mode_combo, row3, COL3 + 1, 1, 2)
-        row3 += 1
+        grid.addWidget(self.region_mode_combo, row2, COL2 + 1, 1, 2)
+        row2 += 1
 
-        # Ch1-2 controls
+        # SD img2img controls (moved from COL3)
+        self.sd_checkbox = QCheckBox("SD img2img")
+        self.sd_checkbox.setChecked(False)
+        self.sd_checkbox.stateChanged.connect(self._on_sd_toggle)
+        grid.addWidget(self.sd_checkbox, row2, COL2, 1, 2)
+        row2 += 1
+
+        # SD Prompt (multiline text area)
+        grid.addWidget(QLabel("SD Prompt"), row2, COL2)
+        self.sd_prompt_edit = QTextEdit()
+        self.sd_prompt_edit.setFixedHeight(60)
+        self.sd_prompt_edit.setPlainText("artistic style, abstract, monochrome ink painting, high quality")
+        self.sd_prompt_edit.textChanged.connect(self._on_sd_prompt_changed)
+        grid.addWidget(self.sd_prompt_edit, row2, COL2 + 1, 2, 2)  # Span 2 rows
+        row2 += 2
+
+        # SD Steps
+        grid.addWidget(QLabel("Steps"), row2, COL2)
+        self.sd_steps_slider = QSlider(Qt.Orientation.Horizontal)
+        self.sd_steps_slider.setFixedHeight(16)
+        self.sd_steps_slider.setFixedWidth(120)
+        self.sd_steps_slider.setMinimum(1)
+        self.sd_steps_slider.setMaximum(20)
+        self.sd_steps_slider.setValue(2)
+        self.sd_steps_slider.valueChanged.connect(self._on_sd_steps_changed)
+        grid.addWidget(self.sd_steps_slider, row2, COL2 + 1)
+        self.sd_steps_label = QLabel("2")
+        self.sd_steps_label.setFixedWidth(25)
+        grid.addWidget(self.sd_steps_label, row2, COL2 + 2)
+        row2 += 1
+
+        # SD Strength
+        grid.addWidget(QLabel("Strength"), row2, COL2)
+        self.sd_strength_slider = QSlider(Qt.Orientation.Horizontal)
+        self.sd_strength_slider.setFixedHeight(16)
+        self.sd_strength_slider.setFixedWidth(120)
+        self.sd_strength_slider.setMinimum(50)
+        self.sd_strength_slider.setMaximum(100)
+        self.sd_strength_slider.setValue(50)
+        self.sd_strength_slider.valueChanged.connect(self._on_sd_strength_changed)
+        grid.addWidget(self.sd_strength_slider, row2, COL2 + 1)
+        self.sd_strength_label = QLabel("0.50")
+        self.sd_strength_label.setFixedWidth(30)
+        grid.addWidget(self.sd_strength_label, row2, COL2 + 2)
+        row2 += 1
+
+        # SD Guidance
+        grid.addWidget(QLabel("Guidance"), row2, COL2)
+        self.sd_guidance_slider = QSlider(Qt.Orientation.Horizontal)
+        self.sd_guidance_slider.setFixedHeight(16)
+        self.sd_guidance_slider.setFixedWidth(120)
+        self.sd_guidance_slider.setMinimum(10)
+        self.sd_guidance_slider.setMaximum(150)
+        self.sd_guidance_slider.setValue(10)
+        self.sd_guidance_slider.valueChanged.connect(self._on_sd_guidance_changed)
+        grid.addWidget(self.sd_guidance_slider, row2, COL2 + 1)
+        self.sd_guidance_label = QLabel("1.0")
+        self.sd_guidance_label.setFixedWidth(30)
+        grid.addWidget(self.sd_guidance_label, row2, COL2 + 2)
+        row2 += 1
+
+        # SD Gen Interval
+        grid.addWidget(QLabel("Gen Interval"), row2, COL2)
+        self.sd_interval_edit = QLineEdit("0.5")
+        self.sd_interval_edit.setFixedWidth(120)
+        self.sd_interval_edit.setFixedHeight(20)
+        self.sd_interval_edit.textChanged.connect(self._on_sd_interval_changed)
+        grid.addWidget(self.sd_interval_edit, row2, COL2 + 1)
+        grid.addWidget(QLabel("s"), row2, COL2 + 2)
+        row2 += 1
+
+        # ===== COLUMN 3: Multiverse Channels (Ch1-4, vertical layout) =====
+        row3 = 0
         self.channel_curve_sliders = []
         self.channel_angle_sliders = []
         self.channel_intensity_sliders = []
-        # GUI slider: 0-360, mapped to -180 to +180
-        # So 180 = 0°, 225 = 45°, 270 = 90°, 315 = 135°
         default_angles = [180, 225, 270, 315]
 
-        for i in range(2):
+        # Create all 4 channels with vertical layout (Curve, Angle, Intensity in separate rows)
+        for i in range(4):
             # Curve
             grid.addWidget(QLabel(f"Ch{i+1} Curve"), row3, COL3)
             curve_slider = QSlider(Qt.Orientation.Horizontal)
@@ -396,71 +465,18 @@ class CompactMainWindow(QMainWindow):
             self.channel_intensity_sliders.append((intensity_slider, intensity_label))
             row3 += 1
 
-        # ===== COLUMN 4: Multiverse Channels =====
+        # ===== COLUMN 4: Ellen Ripley Delay+Grain =====
         row4 = 0
-
-        # Ch3-4 controls
-        for i in range(2, 4):
-            # Curve
-            grid.addWidget(QLabel(f"Ch{i+1} Curve"), row4, COL4)
-            curve_slider = QSlider(Qt.Orientation.Horizontal)
-            curve_slider.setFixedHeight(16)
-            curve_slider.setFixedWidth(120)
-            curve_slider.setMinimum(0)
-            curve_slider.setMaximum(100)
-            curve_slider.setValue(0)
-            curve_slider.valueChanged.connect(lambda val, idx=i: self._on_channel_curve_changed(idx, val))
-            grid.addWidget(curve_slider, row4, COL4 + 1)
-            curve_label = QLabel("0.0")
-            curve_label.setFixedWidth(25)
-            grid.addWidget(curve_label, row4, COL4 + 2)
-            self.channel_curve_sliders.append((curve_slider, curve_label))
-            row4 += 1
-
-            # Angle
-            grid.addWidget(QLabel(f"Ch{i+1} Angle"), row4, COL4)
-            angle_slider = QSlider(Qt.Orientation.Horizontal)
-            angle_slider.setFixedHeight(16)
-            angle_slider.setFixedWidth(120)
-            angle_slider.setMinimum(0)
-            angle_slider.setMaximum(360)
-            angle_slider.setValue(default_angles[i])
-            angle_slider.valueChanged.connect(lambda val, idx=i: self._on_channel_angle_changed(idx, val))
-            grid.addWidget(angle_slider, row4, COL4 + 1)
-            angle_label = QLabel(f"{default_angles[i]}°")
-            angle_label.setFixedWidth(30)
-            grid.addWidget(angle_label, row4, COL4 + 2)
-            self.channel_angle_sliders.append((angle_slider, angle_label))
-            row4 += 1
-
-            # Intensity
-            grid.addWidget(QLabel(f"Ch{i+1} Intensity"), row4, COL4)
-            intensity_slider = QSlider(Qt.Orientation.Horizontal)
-            intensity_slider.setFixedHeight(16)
-            intensity_slider.setFixedWidth(120)
-            intensity_slider.setMinimum(0)
-            intensity_slider.setMaximum(150)
-            intensity_slider.setValue(100)
-            intensity_slider.valueChanged.connect(lambda val, idx=i: self._on_channel_intensity_changed(idx, val))
-            grid.addWidget(intensity_slider, row4, COL4 + 1)
-            intensity_label = QLabel("1.0")
-            intensity_label.setFixedWidth(25)
-            grid.addWidget(intensity_label, row4, COL4 + 2)
-            self.channel_intensity_sliders.append((intensity_slider, intensity_label))
-            row4 += 1
-
-        # ===== COLUMN 5: Ellen Ripley Delay+Grain =====
-        row5 = 0
 
         # Enable
         self.ellen_ripley_checkbox = QCheckBox("Ellen Ripley")
         self.ellen_ripley_checkbox.setChecked(False)
         self.ellen_ripley_checkbox.stateChanged.connect(self._on_ellen_ripley_toggle)
-        grid.addWidget(self.ellen_ripley_checkbox, row5, COL5, 1, 3)
-        row5 += 1
+        grid.addWidget(self.ellen_ripley_checkbox, row4, COL4, 1, 3)
+        row4 += 1
 
         # Delay Time L
-        grid.addWidget(QLabel("Delay Time L"), row5, COL5)
+        grid.addWidget(QLabel("Delay Time L"), row4, COL4)
         self.er_delay_time_l_slider = QSlider(Qt.Orientation.Horizontal)
         self.er_delay_time_l_slider.setFixedHeight(16)
         self.er_delay_time_l_slider.setFixedWidth(120)
@@ -468,14 +484,14 @@ class CompactMainWindow(QMainWindow):
         self.er_delay_time_l_slider.setMaximum(2000)
         self.er_delay_time_l_slider.setValue(250)
         self.er_delay_time_l_slider.valueChanged.connect(self._on_er_delay_time_l_changed)
-        grid.addWidget(self.er_delay_time_l_slider, row5, COL5 + 1)
+        grid.addWidget(self.er_delay_time_l_slider, row4, COL4 + 1)
         self.er_delay_time_l_label = QLabel("0.25s")
         self.er_delay_time_l_label.setFixedWidth(35)
-        grid.addWidget(self.er_delay_time_l_label, row5, COL5 + 2)
-        row5 += 1
+        grid.addWidget(self.er_delay_time_l_label, row4, COL4 + 2)
+        row4 += 1
 
         # Delay Time R
-        grid.addWidget(QLabel("Delay Time R"), row5, COL5)
+        grid.addWidget(QLabel("Delay Time R"), row4, COL4)
         self.er_delay_time_r_slider = QSlider(Qt.Orientation.Horizontal)
         self.er_delay_time_r_slider.setFixedHeight(16)
         self.er_delay_time_r_slider.setFixedWidth(120)
@@ -483,14 +499,14 @@ class CompactMainWindow(QMainWindow):
         self.er_delay_time_r_slider.setMaximum(2000)
         self.er_delay_time_r_slider.setValue(250)
         self.er_delay_time_r_slider.valueChanged.connect(self._on_er_delay_time_r_changed)
-        grid.addWidget(self.er_delay_time_r_slider, row5, COL5 + 1)
+        grid.addWidget(self.er_delay_time_r_slider, row4, COL4 + 1)
         self.er_delay_time_r_label = QLabel("0.25s")
         self.er_delay_time_r_label.setFixedWidth(35)
-        grid.addWidget(self.er_delay_time_r_label, row5, COL5 + 2)
-        row5 += 1
+        grid.addWidget(self.er_delay_time_r_label, row4, COL4 + 2)
+        row4 += 1
 
         # Delay FB
-        grid.addWidget(QLabel("Delay FB"), row5, COL5)
+        grid.addWidget(QLabel("Delay FB"), row4, COL4)
         self.er_delay_fb_slider = QSlider(Qt.Orientation.Horizontal)
         self.er_delay_fb_slider.setFixedHeight(16)
         self.er_delay_fb_slider.setFixedWidth(120)
@@ -498,16 +514,16 @@ class CompactMainWindow(QMainWindow):
         self.er_delay_fb_slider.setMaximum(95)
         self.er_delay_fb_slider.setValue(30)
         self.er_delay_fb_slider.valueChanged.connect(self._on_er_delay_fb_changed)
-        grid.addWidget(self.er_delay_fb_slider, row5, COL5 + 1)
+        grid.addWidget(self.er_delay_fb_slider, row4, COL4 + 1)
         self.er_delay_fb_label = QLabel("0.30")
         self.er_delay_fb_label.setFixedWidth(30)
-        grid.addWidget(self.er_delay_fb_label, row5, COL5 + 2)
-        row5 += 1
+        grid.addWidget(self.er_delay_fb_label, row4, COL4 + 2)
+        row4 += 1
 
         # Delay Chaos + Mix on same row
         self.er_delay_chaos_checkbox = QCheckBox("Dly Chaos")
         self.er_delay_chaos_checkbox.stateChanged.connect(self._on_er_delay_chaos_changed)
-        grid.addWidget(self.er_delay_chaos_checkbox, row5, COL5)
+        grid.addWidget(self.er_delay_chaos_checkbox, row4, COL4)
 
         self.er_delay_mix_slider = QSlider(Qt.Orientation.Horizontal)
         self.er_delay_mix_slider.setFixedHeight(16)
@@ -516,11 +532,11 @@ class CompactMainWindow(QMainWindow):
         self.er_delay_mix_slider.setMaximum(100)
         self.er_delay_mix_slider.setValue(0)
         self.er_delay_mix_slider.valueChanged.connect(self._on_er_delay_mix_changed)
-        grid.addWidget(self.er_delay_mix_slider, row5, COL5 + 1, 1, 2)
-        row5 += 1
+        grid.addWidget(self.er_delay_mix_slider, row4, COL4 + 1, 1, 2)
+        row4 += 1
 
         # Grain Size
-        grid.addWidget(QLabel("Grain Size"), row5, COL5)
+        grid.addWidget(QLabel("Grain Size"), row4, COL4)
         self.er_grain_size_slider = QSlider(Qt.Orientation.Horizontal)
         self.er_grain_size_slider.setFixedHeight(16)
         self.er_grain_size_slider.setFixedWidth(120)
@@ -528,14 +544,14 @@ class CompactMainWindow(QMainWindow):
         self.er_grain_size_slider.setMaximum(100)
         self.er_grain_size_slider.setValue(30)
         self.er_grain_size_slider.valueChanged.connect(self._on_er_grain_size_changed)
-        grid.addWidget(self.er_grain_size_slider, row5, COL5 + 1)
+        grid.addWidget(self.er_grain_size_slider, row4, COL4 + 1)
         self.er_grain_size_label = QLabel("0.30")
         self.er_grain_size_label.setFixedWidth(30)
-        grid.addWidget(self.er_grain_size_label, row5, COL5 + 2)
-        row5 += 1
+        grid.addWidget(self.er_grain_size_label, row4, COL4 + 2)
+        row4 += 1
 
         # Grain Density
-        grid.addWidget(QLabel("Grain Density"), row5, COL5)
+        grid.addWidget(QLabel("Grain Density"), row4, COL4)
         self.er_grain_density_slider = QSlider(Qt.Orientation.Horizontal)
         self.er_grain_density_slider.setFixedHeight(16)
         self.er_grain_density_slider.setFixedWidth(120)
@@ -543,14 +559,14 @@ class CompactMainWindow(QMainWindow):
         self.er_grain_density_slider.setMaximum(100)
         self.er_grain_density_slider.setValue(40)
         self.er_grain_density_slider.valueChanged.connect(self._on_er_grain_density_changed)
-        grid.addWidget(self.er_grain_density_slider, row5, COL5 + 1)
+        grid.addWidget(self.er_grain_density_slider, row4, COL4 + 1)
         self.er_grain_density_label = QLabel("0.40")
         self.er_grain_density_label.setFixedWidth(30)
-        grid.addWidget(self.er_grain_density_label, row5, COL5 + 2)
-        row5 += 1
+        grid.addWidget(self.er_grain_density_label, row4, COL4 + 2)
+        row4 += 1
 
         # Grain Position
-        grid.addWidget(QLabel("Grain Position"), row5, COL5)
+        grid.addWidget(QLabel("Grain Position"), row4, COL4)
         self.er_grain_pos_slider = QSlider(Qt.Orientation.Horizontal)
         self.er_grain_pos_slider.setFixedHeight(16)
         self.er_grain_pos_slider.setFixedWidth(120)
@@ -558,16 +574,16 @@ class CompactMainWindow(QMainWindow):
         self.er_grain_pos_slider.setMaximum(100)
         self.er_grain_pos_slider.setValue(50)
         self.er_grain_pos_slider.valueChanged.connect(self._on_er_grain_pos_changed)
-        grid.addWidget(self.er_grain_pos_slider, row5, COL5 + 1)
+        grid.addWidget(self.er_grain_pos_slider, row4, COL4 + 1)
         self.er_grain_pos_label = QLabel("0.50")
         self.er_grain_pos_label.setFixedWidth(30)
-        grid.addWidget(self.er_grain_pos_label, row5, COL5 + 2)
-        row5 += 1
+        grid.addWidget(self.er_grain_pos_label, row4, COL4 + 2)
+        row4 += 1
 
         # Grain Chaos + Mix on same row
         self.er_grain_chaos_checkbox = QCheckBox("Grn Chaos")
         self.er_grain_chaos_checkbox.stateChanged.connect(self._on_er_grain_chaos_changed)
-        grid.addWidget(self.er_grain_chaos_checkbox, row5, COL5)
+        grid.addWidget(self.er_grain_chaos_checkbox, row4, COL4)
 
         self.er_grain_mix_slider = QSlider(Qt.Orientation.Horizontal)
         self.er_grain_mix_slider.setFixedHeight(16)
@@ -576,14 +592,14 @@ class CompactMainWindow(QMainWindow):
         self.er_grain_mix_slider.setMaximum(100)
         self.er_grain_mix_slider.setValue(0)
         self.er_grain_mix_slider.valueChanged.connect(self._on_er_grain_mix_changed)
-        grid.addWidget(self.er_grain_mix_slider, row5, COL5 + 1, 1, 2)
-        row5 += 1
+        grid.addWidget(self.er_grain_mix_slider, row4, COL4 + 1, 1, 2)
+        row4 += 1
 
         # ===== COLUMN 6: Ellen Ripley Reverb+Chaos =====
-        row6 = 0
+        row5 = 0
 
         # Reverb Room
-        grid.addWidget(QLabel("Reverb Room"), row6, COL6)
+        grid.addWidget(QLabel("Reverb Room"), row5, COL5)
         self.er_reverb_room_slider = QSlider(Qt.Orientation.Horizontal)
         self.er_reverb_room_slider.setFixedHeight(16)
         self.er_reverb_room_slider.setFixedWidth(120)
@@ -591,14 +607,14 @@ class CompactMainWindow(QMainWindow):
         self.er_reverb_room_slider.setMaximum(100)
         self.er_reverb_room_slider.setValue(50)
         self.er_reverb_room_slider.valueChanged.connect(self._on_er_reverb_room_changed)
-        grid.addWidget(self.er_reverb_room_slider, row6, COL6 + 1)
+        grid.addWidget(self.er_reverb_room_slider, row5, COL5 + 1)
         self.er_reverb_room_label = QLabel("0.50")
         self.er_reverb_room_label.setFixedWidth(30)
-        grid.addWidget(self.er_reverb_room_label, row6, COL6 + 2)
-        row6 += 1
+        grid.addWidget(self.er_reverb_room_label, row5, COL5 + 2)
+        row5 += 1
 
         # Reverb Damping
-        grid.addWidget(QLabel("Reverb Damp"), row6, COL6)
+        grid.addWidget(QLabel("Reverb Damp"), row5, COL5)
         self.er_reverb_damp_slider = QSlider(Qt.Orientation.Horizontal)
         self.er_reverb_damp_slider.setFixedHeight(16)
         self.er_reverb_damp_slider.setFixedWidth(120)
@@ -606,14 +622,14 @@ class CompactMainWindow(QMainWindow):
         self.er_reverb_damp_slider.setMaximum(100)
         self.er_reverb_damp_slider.setValue(40)
         self.er_reverb_damp_slider.valueChanged.connect(self._on_er_reverb_damp_changed)
-        grid.addWidget(self.er_reverb_damp_slider, row6, COL6 + 1)
+        grid.addWidget(self.er_reverb_damp_slider, row5, COL5 + 1)
         self.er_reverb_damp_label = QLabel("0.40")
         self.er_reverb_damp_label.setFixedWidth(30)
-        grid.addWidget(self.er_reverb_damp_label, row6, COL6 + 2)
-        row6 += 1
+        grid.addWidget(self.er_reverb_damp_label, row5, COL5 + 2)
+        row5 += 1
 
         # Reverb Decay
-        grid.addWidget(QLabel("Reverb Decay"), row6, COL6)
+        grid.addWidget(QLabel("Reverb Decay"), row5, COL5)
         self.er_reverb_decay_slider = QSlider(Qt.Orientation.Horizontal)
         self.er_reverb_decay_slider.setFixedHeight(16)
         self.er_reverb_decay_slider.setFixedWidth(120)
@@ -621,16 +637,16 @@ class CompactMainWindow(QMainWindow):
         self.er_reverb_decay_slider.setMaximum(100)
         self.er_reverb_decay_slider.setValue(60)
         self.er_reverb_decay_slider.valueChanged.connect(self._on_er_reverb_decay_changed)
-        grid.addWidget(self.er_reverb_decay_slider, row6, COL6 + 1)
+        grid.addWidget(self.er_reverb_decay_slider, row5, COL5 + 1)
         self.er_reverb_decay_label = QLabel("0.60")
         self.er_reverb_decay_label.setFixedWidth(30)
-        grid.addWidget(self.er_reverb_decay_label, row6, COL6 + 2)
-        row6 += 1
+        grid.addWidget(self.er_reverb_decay_label, row5, COL5 + 2)
+        row5 += 1
 
         # Reverb Chaos + Mix on same row
         self.er_reverb_chaos_checkbox = QCheckBox("Rev Chaos")
         self.er_reverb_chaos_checkbox.stateChanged.connect(self._on_er_reverb_chaos_changed)
-        grid.addWidget(self.er_reverb_chaos_checkbox, row6, COL6)
+        grid.addWidget(self.er_reverb_chaos_checkbox, row5, COL5)
 
         self.er_reverb_mix_slider = QSlider(Qt.Orientation.Horizontal)
         self.er_reverb_mix_slider.setFixedHeight(16)
@@ -639,11 +655,11 @@ class CompactMainWindow(QMainWindow):
         self.er_reverb_mix_slider.setMaximum(100)
         self.er_reverb_mix_slider.setValue(0)
         self.er_reverb_mix_slider.valueChanged.connect(self._on_er_reverb_mix_changed)
-        grid.addWidget(self.er_reverb_mix_slider, row6, COL6 + 1, 1, 2)
-        row6 += 1
+        grid.addWidget(self.er_reverb_mix_slider, row5, COL5 + 1, 1, 2)
+        row5 += 1
 
         # Chaos Rate
-        grid.addWidget(QLabel("Chaos Rate"), row6, COL6)
+        grid.addWidget(QLabel("Chaos Rate"), row5, COL5)
         self.er_chaos_rate_slider = QSlider(Qt.Orientation.Horizontal)
         self.er_chaos_rate_slider.setFixedHeight(16)
         self.er_chaos_rate_slider.setFixedWidth(120)
@@ -651,14 +667,14 @@ class CompactMainWindow(QMainWindow):
         self.er_chaos_rate_slider.setMaximum(100)
         self.er_chaos_rate_slider.setValue(1)
         self.er_chaos_rate_slider.valueChanged.connect(self._on_er_chaos_rate_changed)
-        grid.addWidget(self.er_chaos_rate_slider, row6, COL6 + 1)
+        grid.addWidget(self.er_chaos_rate_slider, row5, COL5 + 1)
         self.er_chaos_rate_label = QLabel("0.01")
         self.er_chaos_rate_label.setFixedWidth(30)
-        grid.addWidget(self.er_chaos_rate_label, row6, COL6 + 2)
-        row6 += 1
+        grid.addWidget(self.er_chaos_rate_label, row5, COL5 + 2)
+        row5 += 1
 
         # Chaos Amount
-        grid.addWidget(QLabel("Chaos Amount"), row6, COL6)
+        grid.addWidget(QLabel("Chaos Amount"), row5, COL5)
         self.er_chaos_amount_slider = QSlider(Qt.Orientation.Horizontal)
         self.er_chaos_amount_slider.setFixedHeight(16)
         self.er_chaos_amount_slider.setFixedWidth(120)
@@ -666,30 +682,30 @@ class CompactMainWindow(QMainWindow):
         self.er_chaos_amount_slider.setMaximum(100)
         self.er_chaos_amount_slider.setValue(100)
         self.er_chaos_amount_slider.valueChanged.connect(self._on_er_chaos_amount_changed)
-        grid.addWidget(self.er_chaos_amount_slider, row6, COL6 + 1)
+        grid.addWidget(self.er_chaos_amount_slider, row5, COL5 + 1)
         self.er_chaos_amount_label = QLabel("1.00")
         self.er_chaos_amount_label.setFixedWidth(30)
-        grid.addWidget(self.er_chaos_amount_label, row6, COL6 + 2)
-        row6 += 1
+        grid.addWidget(self.er_chaos_amount_label, row5, COL5 + 2)
+        row5 += 1
 
         # Chaos Shape
         self.er_chaos_shape_checkbox = QCheckBox("Chaos Shape")
         self.er_chaos_shape_checkbox.stateChanged.connect(self._on_er_chaos_shape_changed)
-        grid.addWidget(self.er_chaos_shape_checkbox, row6, COL6, 1, 3)
-        row6 += 1
+        grid.addWidget(self.er_chaos_shape_checkbox, row5, COL5, 1, 3)
+        row5 += 1
 
         # Anchor XY Pad (below column 6)
-        grid.addWidget(QLabel("Anchor XY"), row6, COL6)
-        row6 += 1
+        grid.addWidget(QLabel("Anchor XY"), row5, COL5)
+        row5 += 1
 
         self.anchor_xy_pad = AnchorXYPad()
         self.anchor_xy_pad.position_changed.connect(self._on_anchor_xy_changed)
-        grid.addWidget(self.anchor_xy_pad, row6, COL6, 3, 3)  # Span 3 rows, 3 columns
+        grid.addWidget(self.anchor_xy_pad, row5, COL5, 3, 3)  # Span 3 rows, 3 columns
 
         # Position labels below pad
-        row6 += 3
+        row5 += 3
         self.anchor_xy_label = QLabel("X: 50%  Y: 50%")
-        grid.addWidget(self.anchor_xy_label, row6, COL6, 1, 3)
+        grid.addWidget(self.anchor_xy_label, row5, COL5, 1, 3)
 
     def _build_cv_column(self) -> QWidget:
         """Build CV controls column"""
@@ -1338,6 +1354,51 @@ class CompactMainWindow(QMainWindow):
     def _on_er_chaos_shape_changed(self, state: int):
         shape = state == 2
         self.controller.set_ellen_ripley_chaos_params(shape=shape)
+
+    # SD img2img controls
+    def _on_sd_toggle(self, state: int):
+        """SD img2img enable/disable"""
+        enabled = state == 2
+        if hasattr(self.controller, "set_sd_enabled"):
+            self.controller.set_sd_enabled(enabled)
+        else:
+            status = "enabled" if enabled else "disabled"
+            print(f"SD img2img {status} (not yet implemented in controller)")
+
+    def _on_sd_prompt_changed(self):
+        """SD prompt changed"""
+        prompt = self.sd_prompt_edit.toPlainText()
+        if hasattr(self.controller, "set_sd_prompt"):
+            self.controller.set_sd_prompt(prompt)
+
+    def _on_sd_steps_changed(self, value: int):
+        """SD steps changed"""
+        self.sd_steps_label.setText(str(value))
+        if hasattr(self.controller, "set_sd_parameters"):
+            self.controller.set_sd_parameters(num_steps=value)
+
+    def _on_sd_strength_changed(self, value: int):
+        """SD strength changed"""
+        strength = value / 100.0
+        self.sd_strength_label.setText(f"{strength:.2f}")
+        if hasattr(self.controller, "set_sd_parameters"):
+            self.controller.set_sd_parameters(strength=strength)
+
+    def _on_sd_guidance_changed(self, value: int):
+        """SD guidance changed"""
+        guidance = value / 10.0
+        self.sd_guidance_label.setText(f"{guidance:.1f}")
+        if hasattr(self.controller, "set_sd_parameters"):
+            self.controller.set_sd_parameters(guidance_scale=guidance)
+
+    def _on_sd_interval_changed(self, text: str):
+        """SD generation interval changed"""
+        try:
+            interval = float(text)
+            if hasattr(self.controller, "set_sd_interval"):
+                self.controller.set_sd_interval(interval)
+        except ValueError:
+            pass
 
     # Controller callbacks
     def _on_frame(self, frame: np.ndarray, cables: list):
