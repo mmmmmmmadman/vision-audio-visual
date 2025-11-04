@@ -99,41 +99,41 @@
 
 ### Phase 1: 文檔記錄
 - [x] 創建修復計畫文檔
-- [ ] 記錄所有發現的問題
+- [x] 記錄所有發現的問題
 
 ### Phase 2: ENV Decay 修改
-- [ ] 移除 ENV 1/2/3 Decay 滑桿
-- [ ] 創建單一 ENV Global Decay 滑桿
-- [ ] 實現指數映射 (0.1~1s, 1~5s)
-- [ ] 連接到 controller 方法
+- [x] 移除 ENV 1/2/3 Decay 滑桿
+- [x] 創建單一 ENV Global Decay 滑桿
+- [x] 實現指數映射 (0.1~1s, 1~5s)
+- [x] 連接到 controller 方法
 
 ### Phase 3: Anchor XY Pad
-- [ ] 創建 2D 拖曳控件 class
-- [ ] 放置在第六列下方
-- [ ] 實現滑鼠拖曳邏輯
-- [ ] 添加視覺反饋到攝影機畫面
+- [x] 創建 2D 拖曳控件 class
+- [x] 放置在第六列下方
+- [x] 實現滑鼠拖曳邏輯
+- [x] 添加視覺反饋到攝影機畫面
 
 ### Phase 4: Ellen Ripley Chaos
-- [ ] 添加 Dly Chaos checkbox
-- [ ] 添加 Grn Chaos checkbox
-- [ ] 添加 Rev Chaos checkbox
-- [ ] 連接到 controller 方法
+- [x] 添加 Dly Chaos checkbox (已存在於 10/18 版本)
+- [x] 添加 Grn Chaos checkbox (已存在於 10/18 版本)
+- [x] 添加 Rev Chaos checkbox (已存在於 10/18 版本)
+- [x] 連接到 controller 方法 (已存在於 10/18 版本)
 
 ### Phase 5: Ellen Ripley Mix
-- [ ] 添加 Dly Mix slider (與 Chaos 同行)
-- [ ] 添加 Grn Mix slider (與 Chaos 同行)
-- [ ] 添加 Rev Mix slider (與 Chaos 同行)
-- [ ] 連接到 controller 方法
+- [x] 添加 Dly Mix slider (已存在於 10/18 版本)
+- [x] 添加 Grn Mix slider (已存在於 10/18 版本)
+- [x] 添加 Rev Mix slider (已存在於 10/18 版本)
+- [x] 連接到 controller 方法 (已存在於 10/18 版本)
 
 ### Phase 6: 移除 CV Meter Window
-- [ ] 移除 compact_main_window.py 中的 CV Meter Window 初始化
-- [ ] 移除相關 import
-- [ ] 移除 update_values 調用
+- [x] 移除 compact_main_window.py 中的 CV Meter Window 初始化
+- [x] 移除相關 import
+- [x] 移除 update_values 調用
 
 ### Phase 7: 測試驗證
-- [ ] 測試所有新控制項功能
-- [ ] 驗證參數範圍
-- [ ] 確認無錯誤
+- [x] 測試所有新控制項功能
+- [x] 驗證參數範圍
+- [x] 確認無錯誤
 
 ---
 
