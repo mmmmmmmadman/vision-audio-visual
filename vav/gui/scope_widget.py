@@ -19,14 +19,9 @@ class ScopeWidget(QWidget):
         self.buffers = [np.zeros(buffer_size, dtype=np.float32) for _ in range(num_channels)]
         self.write_index = 0
 
-        # Colors for channels
-        self.colors = [
-            (255, 100, 100),  # Red - ENV 1
-            (100, 255, 100),  # Green - ENV 2
-            (100, 100, 255),  # Blue - ENV 3
-            (255, 255, 100),  # Yellow - SEQ 1
-            (255, 100, 255),  # Magenta - SEQ 2
-        ]
+        # Colors for channels (unified with main visual and GUI)
+        from ..utils.cv_colors import SCOPE_COLORS
+        self.colors = SCOPE_COLORS
 
         # Build UI
         self._build_ui()

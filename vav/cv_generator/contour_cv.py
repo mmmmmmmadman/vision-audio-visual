@@ -102,9 +102,10 @@ class ContourCVGenerator:
             seq1_voltage = self.seq1_value * 10.0
             seq2_voltage = self.seq2_value * 10.0
 
-            # 基於電壓閾值觸發 ENV（retrigger 機制）
-            if seq1_voltage > 5.0:
-                # ENV1 觸發：在 SEQ1 當前步位置
+            # 新的觸發邏輯：ENV1/2 競爭 + ENV3 獨立條件
+            # ENV1 vs ENV2: 比較兩個 sequencer 的電壓，較高者觸發
+            if seq1_voltage > seq2_voltage:
+                # ENV1 觸發：SEQ1 電壓較高，在 SEQ1 當前步位置
                 if self.current_step_x < len(self.sample_points_horizontal):
                     trigger_pos = self.sample_points_horizontal[self.current_step_x]
                     envelopes[0].trigger()
@@ -112,12 +113,12 @@ class ContourCVGenerator:
                         'pos': trigger_pos,
                         'radius': 30,
                         'alpha': 1.0,
-                        'color': (133, 133, 255)  # 粉色 (ENV1)
+                        'color': (133, 133, 255),  # 粉色 (ENV1)
+                        'decay_time': envelopes[0].decay_time  # 儲存 ENV1 decay 時間
                     })
                     self.last_trigger_positions['env1'] = (trigger_pos[0], trigger_pos[1], (133, 133, 255))
-
-            if seq2_voltage > 5.0:
-                # ENV2 觸發：在 SEQ2 當前步位置
+            else:
+                # ENV2 觸發：SEQ2 電壓較高（或相等），在 SEQ2 當前步位置
                 if self.current_step_y < len(self.sample_points_vertical):
                     trigger_pos = self.sample_points_vertical[self.current_step_y]
                     envelopes[1].trigger()
@@ -125,11 +126,13 @@ class ContourCVGenerator:
                         'pos': trigger_pos,
                         'radius': 30,
                         'alpha': 1.0,
-                        'color': (255, 255, 255)  # 白色 (ENV2)
+                        'color': (255, 255, 255),  # 白色 (ENV2)
+                        'decay_time': envelopes[1].decay_time  # 儲存 ENV2 decay 時間
                     })
                     self.last_trigger_positions['env2'] = (trigger_pos[0], trigger_pos[1], (255, 255, 255))
 
-            if seq1_voltage <= 5.0 and seq2_voltage <= 5.0:
+            # ENV3: 獨立條件 - 兩者電壓都低於 5V 時觸發
+            if seq1_voltage < 5.0 and seq2_voltage < 5.0:
                 # ENV3 觸發：在錨點位置
                 anchor_x = int(self.anchor_x_pct * width / 100.0)
                 anchor_y = int(self.anchor_y_pct * height / 100.0)
@@ -138,7 +141,8 @@ class ContourCVGenerator:
                     'pos': (anchor_x, anchor_y),
                     'radius': 30,
                     'alpha': 1.0,
-                    'color': (45, 0, 188)  # 日本國旗紅 (ENV3)
+                    'color': (45, 0, 188),  # 日本國旗紅 (ENV3)
+                    'decay_time': envelopes[2].decay_time  # 儲存 ENV3 decay 時間
                 })
                 self.last_trigger_positions['env3'] = (anchor_x, anchor_y, (45, 0, 188))
 
@@ -267,15 +271,21 @@ class ContourCVGenerator:
             self.seq2_values[i] = edge_x / width
 
     def update_trigger_rings(self):
-        """更新觸發光圈動畫"""
+        """更新觸發光圈動畫（同步於 ENV decay 時間）"""
         new_rings = []
         for ring in self.trigger_rings:
-            # 擴展半徑（三倍速度）
+            # 擴展半徑（三倍速度：6 像素/幀 @ 60 FPS）
             ring['radius'] += 6
-            # 淡出
-            ring['alpha'] -= 0.05
 
-            # 保留尚未完全消失的光圈（三倍最大半徑）
+            # 淡出：根據 ENV decay 時間計算 alpha 遞減速率
+            # 假設視訊線程運行於 60 FPS
+            # alpha_decrement = 1.0 / (decay_time * 60 FPS)
+            fps = 60.0
+            decay_time = ring.get('decay_time', 1.0)  # 默認 1 秒
+            alpha_decrement = 1.0 / (decay_time * fps)
+            ring['alpha'] -= alpha_decrement
+
+            # 保留尚未完全消失的光圈（三倍最大半徑：180 像素）
             if ring['alpha'] > 0 and ring['radius'] < 180:
                 new_rings.append(ring)
 
@@ -361,25 +371,47 @@ class ContourCVGenerator:
         color_seq1 = (133, 133, 255)  # 粉色 #FF8585 (ENV1)
         color_seq2 = (255, 255, 255)  # 白色 (ENV2)
 
-        # SEQ1 邊緣曲線（水平採樣，垂直搜尋）
+        # SEQ1 邊緣曲線（水平採樣，垂直搜尋）- Sample/Hold 階梯式線條
         if len(self.sample_points_horizontal) > 1:
-            points = np.array(self.sample_points_horizontal, dtype=np.int32)
-            cv2.polylines(output, [points], False, color_seq1, 1)
+            points = self.sample_points_horizontal
+            # 繪製階梯式線條（水平 → 垂直）
+            for i in range(len(points) - 1):
+                x1, y1 = points[i]
+                x2, y2 = points[i + 1]
+                # 先畫水平線（保持前一點的 Y 值）
+                cv2.line(output, (x1, y1), (x2, y1), color_seq1, 1)
+                # 再畫垂直線（到達下一點的 Y 值）
+                cv2.line(output, (x2, y1), (x2, y2), color_seq1, 1)
 
-            # 繪製當前步的空心圓圈
+            # 繪製當前步的空心正方形（放大三倍：8 → 24，邊長 = 半徑 * 2）
             if self.current_step_x < len(self.sample_points_horizontal):
                 current_point = self.sample_points_horizontal[self.current_step_x]
-                cv2.circle(output, current_point, 8, color_seq1, 1)
+                half_size = 24
+                cv2.rectangle(output,
+                            (current_point[0] - half_size, current_point[1] - half_size),
+                            (current_point[0] + half_size, current_point[1] + half_size),
+                            color_seq1, 1)
 
-        # SEQ2 邊緣曲線（垂直採樣，水平搜尋）
+        # SEQ2 邊緣曲線（垂直採樣，水平搜尋）- Sample/Hold 階梯式線條
         if len(self.sample_points_vertical) > 1:
-            points = np.array(self.sample_points_vertical, dtype=np.int32)
-            cv2.polylines(output, [points], False, color_seq2, 1)
+            points = self.sample_points_vertical
+            # 繪製階梯式線條（垂直 → 水平）
+            for i in range(len(points) - 1):
+                x1, y1 = points[i]
+                x2, y2 = points[i + 1]
+                # 先畫垂直線（保持前一點的 X 值）
+                cv2.line(output, (x1, y1), (x1, y2), color_seq2, 1)
+                # 再畫水平線（到達下一點的 X 值）
+                cv2.line(output, (x1, y2), (x2, y2), color_seq2, 1)
 
-            # 繪製當前步的空心圓圈
+            # 繪製當前步的空心正方形（放大三倍：8 → 24，邊長 = 半徑 * 2）
             if self.current_step_y < len(self.sample_points_vertical):
                 current_point = self.sample_points_vertical[self.current_step_y]
-                cv2.circle(output, current_point, 8, color_seq2, 1)
+                half_size = 24
+                cv2.rectangle(output,
+                            (current_point[0] - half_size, current_point[1] - half_size),
+                            (current_point[0] + half_size, current_point[1] + half_size),
+                            color_seq2, 1)
 
         # 繪製觸發光圈（ENV）
         for ring in self.trigger_rings:
