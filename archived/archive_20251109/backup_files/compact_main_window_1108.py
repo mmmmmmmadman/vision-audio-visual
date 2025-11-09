@@ -60,9 +60,6 @@ class CompactMainWindow(QMainWindow):
         # Set brightness to 1.5
         self.controller.set_renderer_brightness(1.5)
 
-        # Initialize anchor position to center (50%, 50%)
-        self.controller.set_anchor_position(50.0, 50.0)
-
         # CV Meter Window (independent)
         self.cv_meter_window = CVMeterWindow()
         self.cv_meter_window.show()
@@ -252,19 +249,39 @@ class CompactMainWindow(QMainWindow):
         grid.addWidget(self.env_global_label, row1, COL1 + 2)
         row1 += 1
 
-        # Scan Time (掃描時間，秒)
-        grid.addWidget(QLabel("Scan Time"), row1, COL1)
+        # SEQ 1-2 Steps
+        self.seq_steps_spinners = []
+        for i in range(2):
+            grid.addWidget(QLabel(f"SEQ {i+1} Steps"), row1, COL1)
+            slider = QSlider(Qt.Orientation.Horizontal)
+            slider.setFixedHeight(16)
+            slider.setFixedWidth(140)
+            self._apply_slider_style(slider, COLOR_COL1)
+            slider.setMinimum(4)
+            slider.setMaximum(32)
+            slider.setValue(8)
+            slider.valueChanged.connect(lambda val, idx=i: self._on_seq_steps_changed(idx, val))
+            self._make_slider_learnable(slider, f"seq{i+1}_steps", lambda val, idx=i: self._on_seq_steps_changed(idx, val))
+            grid.addWidget(slider, row1, COL1 + 1)
+            value = QLabel("8")
+            value.setFixedWidth(25)
+            grid.addWidget(value, row1, COL1 + 2)
+            self.seq_steps_spinners.append((slider, value))
+            row1 += 1
+
+        # Unified Clock BPM (統一時鐘)
+        grid.addWidget(QLabel("Clock BPM"), row1, COL1)
         slider = QSlider(Qt.Orientation.Horizontal)
         slider.setFixedHeight(16)
         slider.setFixedWidth(140)
         self._apply_slider_style(slider, COLOR_COL1)
-        slider.setMinimum(2)  # 0.1s
-        slider.setMaximum(600)  # 30s
-        slider.setValue(40)  # 2.0s
+        slider.setMinimum(1)
+        slider.setMaximum(999)
+        slider.setValue(120)
         slider.valueChanged.connect(self._on_clock_rate_changed)
-        self._make_slider_learnable(slider, "scan_time", self._on_clock_rate_changed)
+        self._make_slider_learnable(slider, "clock_bpm", self._on_clock_rate_changed)
         grid.addWidget(slider, row1, COL1 + 1)
-        value = QLabel("2.0s")
+        value = QLabel("120")
         value.setFixedWidth(35)
         grid.addWidget(value, row1, COL1 + 2)
         self.clock_slider = (slider, value)
@@ -1144,12 +1161,17 @@ class CompactMainWindow(QMainWindow):
         self.controller.set_global_env_decay(decay_time)
         self.env_global_label.setText(f"{decay_time:.2f}s")
 
+    def _on_seq_steps_changed(self, seq_idx: int, value: int):
+        # Note: Num steps is now controlled by ContourCVGenerator parameters
+        # This is kept for backward compatibility but may not be used
+        _, label = self.seq_steps_spinners[seq_idx]
+        label.setText(str(value))
+
     def _on_clock_rate_changed(self, value: int):
-        """Scan time in seconds"""
-        scan_time = value / 20.0  # 2-600 -> 0.1-30s
-        self.controller.set_scan_time(scan_time)
+        """Unified clock rate for both SEQ1 and SEQ2"""
+        self.controller.set_cv_clock_rate(float(value))
         _, label = self.clock_slider
-        label.setText(f"{scan_time:.1f}s")
+        label.setText(str(value))
 
     def _on_anchor_xy_changed(self, x_pct: float, y_pct: float):
         """Anchor XY position changed from 2D pad"""

@@ -19,12 +19,11 @@ class AnchorXYPad(QWidget):
         self.y_pct = 50.0  # 0-100
         self.dragging = False
 
-        # Fixed size: 1.3x larger, 16:9 aspect ratio (matching main visual)
-        # Original: 140x140, scaled 1.3x = 182x182
-        # 16:9 ratio: width=182, height=102 (182 * 9/16)
-        self.setMinimumSize(182, 102)
-        self.setMaximumSize(182, 102)
-        self.setFixedSize(182, 102)
+        # Fixed size: 1.5x larger, 16:9 aspect ratio (matching main visual)
+        # Original: 182x102, scaled 1.5x = 273x153
+        self.setMinimumSize(273, 153)
+        self.setMaximumSize(273, 153)
+        self.setFixedSize(273, 153)
 
         # Enable mouse tracking
         self.setMouseTracking(True)
@@ -71,7 +70,7 @@ class AnchorXYPad(QWidget):
 
         # Calculate anchor pixel position
         anchor_x = margin + (width - margin * 2) * self.x_pct / 100.0
-        anchor_y = margin + (height - margin * 2) * (100.0 - self.y_pct) / 100.0  # Invert Y
+        anchor_y = margin + (height - margin * 2) * self.y_pct / 100.0  # Direct mapping
 
         # Draw anchor point (circle)
         painter.setPen(QPen(QColor(255, 255, 255), 2))
@@ -107,7 +106,7 @@ class AnchorXYPad(QWidget):
 
         # Calculate percentage
         x_pct = (pos.x() - margin) / (width - margin * 2) * 100.0
-        y_pct = (1.0 - (pos.y() - margin) / (height - margin * 2)) * 100.0  # Invert Y
+        y_pct = (pos.y() - margin) / (height - margin * 2) * 100.0  # Direct mapping
 
         # Clamp to 0-100
         x_pct = max(0.0, min(100.0, x_pct))

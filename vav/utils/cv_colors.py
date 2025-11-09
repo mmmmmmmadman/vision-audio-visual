@@ -4,21 +4,22 @@ Ensures consistent colors across main visual, CV meters, and GUI displays.
 """
 
 # BGR format for OpenCV (used in ContourCV main visual)
+# Scheme A+: Classic Torii Colors (SEQ Enhanced) - Japanese Shrine Red & White
 CV_COLORS_BGR = {
-    'ENV1': (133, 133, 255),  # Light blue-purple
-    'ENV2': (255, 255, 255),  # White
-    'ENV3': (45, 0, 188),     # Japanese flag red
-    'SEQ1': (133, 133, 255),  # Light blue-purple (same as ENV1)
-    'SEQ2': (255, 255, 255),  # White (same as ENV2)
+    'ENV1': (100, 120, 227),  # Light Vermillion (淡朱) - softer paired with SEQ1
+    'ENV2': (220, 220, 220),  # Silver White (銀白) - softer paired with SEQ2
+    'ENV3': (30, 0, 180),     # Deep Crimson (深紅) - stable deep red
+    'SEQ1': (0, 69, 255),     # Flame Vermillion (炎朱) - MOST VIVID orange-red
+    'SEQ2': (255, 255, 255),  # Snow White (雪白) - PURE white, highest contrast
 }
 
 # RGB format for PyQt/pyqtgraph (used in CV meters and GUI)
 CV_COLORS_RGB = {
-    'ENV1': (255, 133, 133),  # Light purple-blue (reversed from BGR)
-    'ENV2': (255, 255, 255),  # White
-    'ENV3': (188, 0, 45),     # Japanese flag red (reversed from BGR)
-    'SEQ1': (255, 133, 133),  # Light purple-blue (same as ENV1)
-    'SEQ2': (255, 255, 255),  # White (same as ENV2)
+    'ENV1': (227, 120, 100),  # Light Vermillion (淡朱) - softer paired with SEQ1
+    'ENV2': (220, 220, 220),  # Silver White (銀白) - softer paired with SEQ2
+    'ENV3': (180, 0, 30),     # Deep Crimson (深紅) - stable deep red
+    'SEQ1': (255, 69, 0),     # Flame Vermillion (炎朱) - MOST VIVID orange-red
+    'SEQ2': (255, 255, 255),  # Snow White (雪白) - PURE white, highest contrast
 }
 
 # Helper function to convert BGR to RGB

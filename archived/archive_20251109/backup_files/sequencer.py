@@ -23,6 +23,7 @@ class SequenceCV(CVSignal):
         self.current_step = 0
         self.phase = 0.0
         self.samples_per_step = 0
+        self.step_changed = False
         self.update_clock()
 
     def update_clock(self):
@@ -55,14 +56,22 @@ class SequenceCV(CVSignal):
 
     def process(self) -> float:
         """Generate next sample"""
+        self.step_changed = False  # Reset before checking
         self.phase += 1
 
         if self.phase >= self.samples_per_step:
             self.phase = 0
             self.current_step = (self.current_step + 1) % self.num_steps
+            self.step_changed = True  # Mark that step changed
 
         self.value = self.sequence[self.current_step]
         return self.value
+
+    def did_step_change(self) -> bool:
+        """Check if the step changed on the last process() call"""
+        result = self.step_changed
+        # Don't reset here - let process() reset it next time
+        return result
 
     def set_clock_rate(self, bpm: float):
         """Set clock rate in BPM"""

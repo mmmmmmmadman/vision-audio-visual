@@ -6,6 +6,7 @@ Contour-based CV generator
 import cv2
 import numpy as np
 from typing import List, Tuple
+from ..utils.cv_colors import CV_COLORS_BGR
 
 
 class ContourCVGenerator:
@@ -113,10 +114,10 @@ class ContourCVGenerator:
                         'pos': trigger_pos,
                         'radius': 30,
                         'alpha': 1.0,
-                        'color': (133, 133, 255),  # 粉色 (ENV1)
+                        'color': CV_COLORS_BGR['ENV1'],  # Light Vermillion (淡朱)
                         'decay_time': envelopes[0].decay_time  # 儲存 ENV1 decay 時間
                     })
-                    self.last_trigger_positions['env1'] = (trigger_pos[0], trigger_pos[1], (133, 133, 255))
+                    self.last_trigger_positions['env1'] = (trigger_pos[0], trigger_pos[1], CV_COLORS_BGR['ENV1'])
             else:
                 # ENV2 觸發：SEQ2 電壓較高（或相等），在 SEQ2 當前步位置
                 if self.current_step_y < len(self.sample_points_vertical):
@@ -126,10 +127,10 @@ class ContourCVGenerator:
                         'pos': trigger_pos,
                         'radius': 30,
                         'alpha': 1.0,
-                        'color': (255, 255, 255),  # 白色 (ENV2)
+                        'color': CV_COLORS_BGR['ENV2'],  # Silver White (銀白)
                         'decay_time': envelopes[1].decay_time  # 儲存 ENV2 decay 時間
                     })
-                    self.last_trigger_positions['env2'] = (trigger_pos[0], trigger_pos[1], (255, 255, 255))
+                    self.last_trigger_positions['env2'] = (trigger_pos[0], trigger_pos[1], CV_COLORS_BGR['ENV2'])
 
             # ENV3: 獨立條件 - 兩者電壓都低於 5V 時觸發
             if seq1_voltage < 5.0 and seq2_voltage < 5.0:
@@ -141,10 +142,10 @@ class ContourCVGenerator:
                     'pos': (anchor_x, anchor_y),
                     'radius': 30,
                     'alpha': 1.0,
-                    'color': (45, 0, 188),  # 日本國旗紅 (ENV3)
+                    'color': CV_COLORS_BGR['ENV3'],  # Deep Crimson (深紅)
                     'decay_time': envelopes[2].decay_time  # 儲存 ENV3 decay 時間
                 })
-                self.last_trigger_positions['env3'] = (anchor_x, anchor_y, (45, 0, 188))
+                self.last_trigger_positions['env3'] = (anchor_x, anchor_y, CV_COLORS_BGR['ENV3'])
 
     def detect_contours(self, gray: np.ndarray) -> Tuple[List, np.ndarray]:
         """檢測輪廓並返回輪廓列表和邊緣圖
@@ -368,8 +369,8 @@ class ContourCVGenerator:
         #     output[mask] = cv2.addWeighted(output[mask], 0.7, edges_bgr[mask], 0.3, 0)
 
         # 繪製 SEQ 邊緣曲線（與 ENV 配色一致）
-        color_seq1 = (133, 133, 255)  # 粉色 #FF8585 (ENV1)
-        color_seq2 = (255, 255, 255)  # 白色 (ENV2)
+        color_seq1 = CV_COLORS_BGR['SEQ1']  # Flame Vermillion (炎朱) - MOST VIVID
+        color_seq2 = CV_COLORS_BGR['SEQ2']  # Snow White (雪白) - PURE white
 
         # SEQ1 邊緣曲線（水平採樣，垂直搜尋）- Sample/Hold 階梯式線條
         if len(self.sample_points_horizontal) > 1:
@@ -495,17 +496,17 @@ class ContourCVGenerator:
                    font, font_scale, seq_value_color, font_thickness)
         y_offset += line_height
 
-        # SEQ1 長條（粉色）
+        # SEQ1 長條（Flame Vermillion 炎朱 - MOST VIVID）
         seq1_ratio = self.seq1_value
         cv2.putText(frame, f"SEQ1:",
                    (panel_x + padding, y_offset),
-                   font, font_scale, (133, 133, 255), font_thickness)  # 粉色
+                   font, font_scale, CV_COLORS_BGR['SEQ1'], font_thickness)
         # 電壓顯示
         voltage_text = f"{seq1_ratio * 10.0:.1f}V"
         cv2.putText(frame, voltage_text, (panel_x + 220, y_offset),
-                   font, font_scale - 0.05, (133, 133, 255), font_thickness)
+                   font, font_scale - 0.05, CV_COLORS_BGR['SEQ1'], font_thickness)
 
-        # SEQ1 條狀圖（粉色）
+        # SEQ1 條狀圖（Flame Vermillion）
         bar_x = panel_x + 80
         bar_y = y_offset - 12
         bar_width = 130
@@ -516,19 +517,19 @@ class ContourCVGenerator:
         if filled_width > 0:
             cv2.rectangle(frame, (bar_x + 1, bar_y + 1),
                          (bar_x + filled_width, bar_y + bar_height - 1),
-                         (133, 133, 255), -1)  # 粉色
+                         CV_COLORS_BGR['SEQ1'], -1)
         y_offset += line_height
 
-        # SEQ2 長條（白色）
+        # SEQ2 長條（Snow White 雪白 - PURE white）
         seq2_ratio = self.seq2_value
         cv2.putText(frame, f"SEQ2:",
                    (panel_x + padding, y_offset),
-                   font, font_scale, seq_value_color, font_thickness)
+                   font, font_scale, CV_COLORS_BGR['SEQ2'], font_thickness)
         voltage_text = f"{seq2_ratio * 10.0:.1f}V"
         cv2.putText(frame, voltage_text, (panel_x + 220, y_offset),
-                   font, font_scale - 0.05, seq_value_color, font_thickness)
+                   font, font_scale - 0.05, CV_COLORS_BGR['SEQ2'], font_thickness)
 
-        # SEQ2 條狀圖（白色）
+        # SEQ2 條狀圖（Snow White）
         bar_y = y_offset - 12
         cv2.rectangle(frame, (bar_x, bar_y), (bar_x + bar_width, bar_y + bar_height),
                      (80, 80, 80), 1)
@@ -536,12 +537,12 @@ class ContourCVGenerator:
         if filled_width > 0:
             cv2.rectangle(frame, (bar_x + 1, bar_y + 1),
                          (bar_x + filled_width, bar_y + bar_height - 1),
-                         (255, 255, 255), -1)  # 白色
+                         CV_COLORS_BGR['SEQ2'], -1)
         y_offset += line_height + 5
 
         # Envelope 數據（如果提供）
         if envelopes and len(envelopes) >= 3:
-            env_colors = [(133, 133, 255), (255, 255, 255), (45, 0, 188)]  # ENV1, 2, 3 顏色
+            env_colors = [CV_COLORS_BGR['ENV1'], CV_COLORS_BGR['ENV2'], CV_COLORS_BGR['ENV3']]
             env_names = ["ENV1", "ENV2", "ENV3"]
 
             for i, (env, name, color) in enumerate(zip(envelopes, env_names, env_colors)):
