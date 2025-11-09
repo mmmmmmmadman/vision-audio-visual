@@ -9,7 +9,7 @@ import time
 import cv2
 
 from ..vision.camera import Camera
-from ..cv_generator.contour_cv import ContourCVGenerator
+from ..cv_generator.contour_scanner import ContourScanner
 from ..cv_generator.envelope import DecayEnvelope
 from ..cv_generator.sequencer import SequenceCV
 from ..audio.io import AudioIO
@@ -52,7 +52,7 @@ class VAVController:
 
         # Vision system
         self.camera: Optional[Camera] = None
-        self.contour_cv_generator: Optional[ContourCVGenerator] = None
+        self.contour_cv_generator: Optional[ContourScanner] = None
         self.current_frame: Optional[np.ndarray] = None
         self.edges: Optional[np.ndarray] = None  # Edge detection results
 
@@ -144,7 +144,7 @@ class VAVController:
             return False
 
         # Initialize Contour CV Generator (replaces cable detection)
-        self.contour_cv_generator = ContourCVGenerator()
+        self.contour_cv_generator = ContourScanner()
 
         # Initialize Multiverse renderer (GPU > Numba JIT > CPU) - TESTING GPU
         import platform
@@ -328,6 +328,7 @@ class VAVController:
         frame_time = 1.0 / self.camera.fps
         cv_update_time = 1.0 / 60.0  # Update CV at 60Hz for smooth scope
         last_cv_update = time.time()
+        last_frame_time = 0.0
 
         # Skip frames for performance
         frame_skip = 2  # Process every 2nd frame
@@ -391,21 +392,21 @@ class VAVController:
             # Convert to grayscale for edge detection (from SD or camera, not multiverse)
             gray = cv2.cvtColor(cv_input_frame, cv2.COLOR_BGR2GRAY)
 
-            # Generate sequence values from edge detection
-            self.contour_cv_generator.sample_edge_sequences(gray)
+            # Detect and extract contour
+            self.edges = self.contour_cv_generator.detect_and_extract_contour(gray)
 
-            # Update CV sequencer and trigger envelopes
+            # Update scan progress and CV values
             current_time = time.time()
-            if current_time - last_cv_update >= cv_update_time:
-                dt = current_time - last_cv_update
-                self.contour_cv_generator.update_sequencer_and_triggers(
-                    dt, frame.shape[1], frame.shape[0], self.envelopes
-                )
+            dt_since_last_update = current_time - last_cv_update
+            if dt_since_last_update >= cv_update_time:
+                self.contour_cv_generator.update_scan(dt_since_last_update, frame.shape[1], frame.shape[0], self.envelopes)
                 self._update_cv_values()
                 last_cv_update = current_time
 
-            # Update trigger ring animations
-            self.contour_cv_generator.update_trigger_rings()
+            # Update trigger ring animations (每幀都要更新以保持流暢)
+            frame_dt = current_time - last_frame_time if last_frame_time > 0 else 1.0/60.0
+            self.contour_cv_generator.update_trigger_rings(frame_dt)
+            last_frame_time = current_time
 
             # Generate visualization frame (for both GUI and virtual camera)
             # Edge detection is now done inside Multiverse rendering (based on SD processed frame)
@@ -441,11 +442,10 @@ class VAVController:
             return self._render_simple(frame)
 
     def _render_simple(self, frame):
-        """Simple visualization: use ContourCVGenerator overlay"""
-        # Use ContourCVGenerator's draw_overlay method
+        """Simple visualization: use ContourScanner overlay"""
+        # Use ContourScanner's draw_overlay method
         display_frame = self.contour_cv_generator.draw_overlay(
-            frame, self.edges if self.edges is not None else np.zeros_like(frame[:,:,0]),
-            envelopes=self.envelopes
+            frame, self.edges if self.edges is not None else np.zeros_like(frame[:,:,0])
         )
         return display_frame
 
@@ -470,10 +470,10 @@ class VAVController:
                     sd_output = cv2.resize(sd_output, (frame.shape[1], frame.shape[0]))
                 input_frame = sd_output
 
-        # Detect edges from input_frame (SD or camera) for CV generation
+        # Detect and extract contour from input_frame (SD or camera) for CV generation
         # This ensures CV generation is based on the processed/styled image
         gray_input = cv2.cvtColor(input_frame, cv2.COLOR_BGR2GRAY)
-        _, edges_new = self.contour_cv_generator.detect_contours(gray_input)
+        edges_new = self.contour_cv_generator.detect_and_extract_contour(gray_input)
         self.edges = edges_new  # Update edges to reflect SD processed content
 
         # Prepare channel data for Multiverse renderer
@@ -574,11 +574,10 @@ class VAVController:
             # Convert back to uint8
             rendered_bgr = (result * 255.0).astype(np.uint8)
 
-        # Draw CV overlays (dashboard, SEQ lines, ENV rings) - must be on top
+        # Draw CV overlays (contour line, scan position, progress bar) - must be on top
         rendered_bgr = self.contour_cv_generator.draw_overlay(
             rendered_bgr,
-            self.edges if self.edges is not None else np.zeros_like(rendered_bgr[:,:,0]),
-            envelopes=self.envelopes
+            self.edges if self.edges is not None else np.zeros_like(rendered_bgr[:,:,0])
         )
 
         # Add info text
@@ -598,26 +597,20 @@ class VAVController:
         return rendered_bgr
 
     def _update_cv_values(self):
-        """Update CV generator values and handle sequential switch"""
-        # Sequential switch logic: check if ContourCV seq1/seq2 stepped
+        """Update CV values from contour scanner (continuous output)"""
         if self.contour_cv_generator:
-            # SEQ1 -> Curve (輪流控制 channel 0-3 的 curve, 擴大範圍 0-5)
-            if self.contour_cv_generator.seq1_step_changed:
-                seq1_value = self.contour_cv_generator.seq1_value
-                curve_value = seq1_value * 5.0
-                self.renderer_params['channel_curves'][self.seq1_current_channel] = curve_value
-                if self.param_callback:
-                    self.param_callback("curve", self.seq1_current_channel, curve_value)
-                self.seq1_current_channel = (self.seq1_current_channel + 1) % 4
+            # Store CV values for audio/visual callback
+            # SEQ1/SEQ2: X/Y coordinates (0-1)
+            # ENV1/ENV2/ENV3: contour-based envelopes (0-1)
+            self.cv_values[0] = self.contour_cv_generator.env1_value  # ENV1
+            self.cv_values[1] = self.contour_cv_generator.env2_value  # ENV2
+            self.cv_values[2] = self.contour_cv_generator.env3_value  # ENV3
+            self.cv_values[3] = self.contour_cv_generator.seq1_value  # SEQ1 (X)
+            self.cv_values[4] = self.contour_cv_generator.seq2_value  # SEQ2 (Y)
 
-            # SEQ2 -> Angle (輪流控制 channel 0-3 的 angle, 擴大範圍多圈)
-            if self.contour_cv_generator.seq2_step_changed:
-                seq2_value = self.contour_cv_generator.seq2_value
-                angle_value = seq2_value * 720.0
-                self.renderer_params['channel_angles'][self.seq2_current_channel] = angle_value
-                if self.param_callback:
-                    self.param_callback("angle", self.seq2_current_channel, angle_value)
-                self.seq2_current_channel = (self.seq2_current_channel + 1) % 4
+            # Trigger CV callback for GUI updates
+            if self.cv_callback:
+                self.cv_callback(self.cv_values)
 
     # Contour CV controls (replacing cable analysis)
     def set_anchor_position(self, x_pct: float, y_pct: float):
@@ -633,17 +626,17 @@ class VAVController:
     def set_edge_threshold(self, threshold: int):
         """Set edge detection threshold (0-255)"""
         if self.contour_cv_generator:
-            self.contour_cv_generator.set_edge_threshold(threshold)
+            self.contour_cv_generator.set_threshold(threshold)
 
     def set_cv_smoothing(self, smoothing: int):
         """Set temporal smoothing (0-100)"""
         if self.contour_cv_generator:
             self.contour_cv_generator.set_smoothing(smoothing)
 
-    def set_cv_clock_rate(self, bpm: float):
-        """Set unified clock rate for SEQ1 and SEQ2 (1-999 BPM)"""
+    def set_scan_time(self, scan_time: float):
+        """Set contour scan time in seconds (0.1-60s)"""
         if self.contour_cv_generator:
-            self.contour_cv_generator.set_clock_rate(bpm)
+            self.contour_cv_generator.set_scan_time(scan_time)
 
     def _update_audio_buffers(self, indata: np.ndarray):
         """Update audio buffers for Multiverse rendering with frequency detection"""
