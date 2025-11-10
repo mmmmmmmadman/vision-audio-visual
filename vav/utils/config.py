@@ -13,7 +13,7 @@ class Config:
     DEFAULT_CONFIG = {
         "audio": {
             "sample_rate": 48000,
-            "buffer_size": 256,
+            "buffer_size": 128,
             "channels": 8,
         },
         "video": {

@@ -2,6 +2,44 @@
 
 ---
 
+## [2025-11-10] 視覺優化、程式碼清理與 MIDI 控制強化
+
+### 視覺優化
+- ROI 圓圈改為白色半透明 1px 線條
+- 移除主視覺的 Anchor 十字標記
+
+### MIDI 控制強化
+- Anchor X/Y 支援 MIDI Mapping
+  - 右鍵點擊 XY Pad 可選擇 "MIDI Learn Anchor X" 或 "MIDI Learn Anchor Y"
+  - Y 軸方向已反轉：MIDI 值 0-100 對應 GUI 100-0
+
+### 效果器預設值調整
+- Grain Chaos 預設開啟
+- Buffer Size 預設值改為 128 samples
+
+### 程式碼清理
+**移除未使用的模組**：
+- `vav/vision/cable_detector.py` - Cable 偵測功能
+- `vav/vision/analyzer.py` - Cable 分析功能
+- `vav/visual/sd_shape_generator.py` - Stable Diffusion 形狀生成
+- `vav/io/` - 空目錄
+
+**移除未使用的功能**：
+- Controller 中的主程序 Mixer（audio_process 的 Mixer 仍保留使用）
+- Controller 中的 AudioAnalyzer
+- `set_mixer_params()` 方法
+
+**修改檔案**：
+- `vav/cv_generator/contour_scanner.py` (lines 431-442)
+- `vav/audio/effects/ellen_ripley.py` (line 46)
+- `vav/gui/anchor_xy_pad.py` (lines 5, 30-38)
+- `vav/gui/compact_main_window.py` (lines 8, 780, 817-850)
+- `vav/utils/config.py` (line 16)
+- `vav/core/controller.py` (lines 15-17, 48, 98-102, 229-233, 634-645 removed)
+- `vav/gui/device_dialog.py` (lines 110, 116)
+
+---
+
 ## [2025-11-04] GPU 渲染器優化與程式碼清理
 
 ### 優化內容

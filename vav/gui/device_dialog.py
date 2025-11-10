@@ -28,6 +28,7 @@ class DeviceSelectionDialog(QDialog):
         self.selected_audio_output = None
         self.selected_camera_input = None
         self.selected_camera_output = None
+        self.selected_buffer_size = None
 
         self._build_ui()
         self._populate_devices()
@@ -41,10 +42,21 @@ class DeviceSelectionDialog(QDialog):
         audio_layout = QFormLayout(audio_group)
 
         self.audio_input_combo = QComboBox()
+        self.audio_input_combo.setMinimumWidth(300)
         audio_layout.addRow("Input:", self.audio_input_combo)
 
         self.audio_output_combo = QComboBox()
+        self.audio_output_combo.setMinimumWidth(300)
         audio_layout.addRow("Output:", self.audio_output_combo)
+
+        self.buffer_size_combo = QComboBox()
+        self.buffer_size_combo.setMinimumWidth(300)
+        self.buffer_size_combo.addItem("64 samples (1.3 ms)", 64)
+        self.buffer_size_combo.addItem("128 samples (2.7 ms)", 128)
+        self.buffer_size_combo.addItem("256 samples (5.3 ms)", 256)
+        self.buffer_size_combo.addItem("512 samples (10.7 ms)", 512)
+        self.buffer_size_combo.addItem("1024 samples (21.3 ms)", 1024)
+        audio_layout.addRow("Buffer Size:", self.buffer_size_combo)
 
         layout.addWidget(audio_group)
 
@@ -53,9 +65,11 @@ class DeviceSelectionDialog(QDialog):
         video_layout = QFormLayout(video_group)
 
         self.camera_input_combo = QComboBox()
+        self.camera_input_combo.setMinimumWidth(300)
         video_layout.addRow("Camera Input:", self.camera_input_combo)
 
         self.camera_output_combo = QComboBox()
+        self.camera_output_combo.setMinimumWidth(300)
         video_layout.addRow("Camera Output (Virtual):", self.camera_output_combo)
 
         layout.addWidget(video_group)
@@ -91,6 +105,17 @@ class DeviceSelectionDialog(QDialog):
                 if dev['max_output_channels'] > 0:
                     name = f"{i}: {dev['name']} ({dev['max_output_channels']} out)"
                     self.audio_output_combo.addItem(name, i)
+
+            # Set buffer size (default to 128 if not specified)
+            current_buffer_size = self.current_devices.get('buffer_size', 128)
+            idx = self.buffer_size_combo.findData(current_buffer_size)
+            if idx >= 0:
+                self.buffer_size_combo.setCurrentIndex(idx)
+            else:
+                # Default to 128
+                idx = self.buffer_size_combo.findData(128)
+                if idx >= 0:
+                    self.buffer_size_combo.setCurrentIndex(idx)
 
             # Set current or default devices
             # Priority: current_devices > system defaults
@@ -220,6 +245,7 @@ class DeviceSelectionDialog(QDialog):
         devices = {
             'audio_input': self.audio_input_combo.currentData(),
             'audio_output': self.audio_output_combo.currentData(),
+            'buffer_size': self.buffer_size_combo.currentData(),
             'camera_input': self.camera_input_combo.currentData(),
             'camera_output': self.camera_output_combo.currentData(),
         }

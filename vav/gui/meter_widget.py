@@ -6,6 +6,7 @@ import numpy as np
 from PyQt6.QtWidgets import QWidget, QSizePolicy
 from PyQt6.QtCore import Qt, QRectF
 from PyQt6.QtGui import QPainter, QColor, QPen
+from ..utils.cv_colors import SCOPE_COLORS
 
 
 class MeterWidget(QWidget):
@@ -34,14 +35,8 @@ class MeterWidget(QWidget):
         self.peak_hold_frames = np.zeros(num_channels, dtype=np.int32)
         self.peak_hold_duration = 10  # frames
 
-        # Colors matching contour CV generator
-        self.colors = [
-            QColor(255, 133, 133),  # ENV 1 - 粉色
-            QColor(255, 255, 255),  # ENV 2 - 白色
-            QColor(188, 0, 45),     # ENV 3 - 日本國旗紅
-            QColor(255, 255, 255),  # SEQ 1 - 白色
-            QColor(255, 255, 255),  # SEQ 2 - 白色
-        ]
+        # Colors from unified color scheme (ENV1, ENV2, ENV3, SEQ1, SEQ2)
+        self.colors = [QColor(*rgb) for rgb in SCOPE_COLORS]
 
         # Channel labels
         self.labels = ["ENV1", "ENV2", "ENV3", "SEQ1", "SEQ2"]
@@ -57,7 +52,16 @@ class MeterWidget(QWidget):
             samples: Array of values (0.0-1.0) for each channel
         """
         if len(samples) != self.num_channels:
+            print(f"METER DEBUG: Wrong length {len(samples)} != {self.num_channels}")
             return
+
+        # DEBUG
+        import time
+        if not hasattr(self, '_last_debug_time'):
+            self._last_debug_time = 0
+        if time.time() - self._last_debug_time > 1.0:
+            print(f"METER DEBUG: Received samples: {samples}")
+            self._last_debug_time = time.time()
 
         self.values = np.clip(samples, 0.0, 1.0)
 
@@ -134,9 +138,10 @@ class MeterWidget(QWidget):
                 painter.setPen(QPen(self.colors[i], 2))
                 painter.drawLine(peak_x, y, peak_x, y + meter_height)
 
-            # Draw value text (right side of meter)
+            # Draw value text (right side of meter) - display as voltage (0-10V)
             if self.values[i] > 0.01:
-                value_text = f"{self.values[i]:.2f}"
+                voltage = self.values[i] * 10.0  # Convert 0-1 to 0-10V
+                value_text = f"{voltage:.1f}V"
                 painter.setPen(QPen(self.colors[i], 1))
                 painter.drawText(
                     meter_x + meter_width + 5, y,

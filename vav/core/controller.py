@@ -12,9 +12,7 @@ from ..vision.camera import Camera
 from ..cv_generator.contour_scanner import ContourScanner
 from ..cv_generator.envelope import DecayEnvelope
 from ..audio.io import AudioIO
-from ..audio.mixer import StereoMixer
-from ..audio.effects.ellen_ripley import EllenRipleyEffectChain
-from ..audio.analysis import AudioAnalyzer
+from ..audio.audio_process import AudioProcess
 from ..visual.gpu_renderer import GPUMultiverseRenderer
 from ..visual.qt_opengl_renderer import QtMultiverseRenderer
 from ..visual.content_aware_regions import ContentAwareRegionMapper
@@ -47,13 +45,12 @@ class VAVController:
 
         # Audio configuration
         self.sample_rate = self.config.get("sample_rate", 48000)
-        self.buffer_size = self.config.get("buffer_size", 256)
+        self.buffer_size = self.config.get("buffer_size", 128)
 
         # Vision system
         self.camera: Optional[Camera] = None
         self.contour_cv_generator: Optional[ContourScanner] = None
         self.current_frame: Optional[np.ndarray] = None
-        self.edges: Optional[np.ndarray] = None  # Edge detection results
 
         # Virtual camera output
         self.virtual_camera = None
@@ -95,13 +92,11 @@ class VAVController:
         self.seq1_current_channel = 0  # 0-3 for curve control
         self.seq2_current_channel = 0  # 0-3 for angle control
 
-        # Audio system
-        self.audio_io: Optional[AudioIO] = None
-        self.mixer: Optional[StereoMixer] = None
-        self.audio_analyzer: Optional[AudioAnalyzer] = None
+        # Audio system (使用獨立 process)
+        self.audio_process: Optional[AudioProcess] = None
+        self.audio_io: Optional[AudioIO] = None  # 保留用於裝置選擇
 
-        # Ellen Ripley effect chain (master effects)
-        self.ellen_ripley: Optional[EllenRipleyEffectChain] = None
+        # Ellen Ripley effect chain (在 audio process 中)
         self.ellen_ripley_enabled = False
 
 
@@ -206,27 +201,18 @@ class VAVController:
             print(f"✓ CPU Multiverse renderer: {self.camera.width}x{self.camera.height} (fallback)")
             self.using_gpu = False
 
-        # CV generators
-        cv_config = self.config.get("cv", {})
+        # CV generators (不再在這裡創建，移到 AudioProcess 中)
+        # cv_config = self.config.get("cv", {})
 
-        # 3 decay envelopes
-        for i in range(3):
-            env = DecayEnvelope(
-                sample_rate=self.sample_rate,
-                decay_time=cv_config.get(f"decay_{i}_time", 1.0),
-            )
-            self.envelopes.append(env)
-
-        # Audio system
+        # Audio system (改用 AudioProcess)
         audio_config = self.config.get("audio", {})
 
-        # Default output channels: try for 7 (stereo + 5 CV), fallback to device max
-        # Default input channels: 4 for Multiverse (Ch1-4)
+        # 僅保留 AudioIO 用於裝置選擇（GUI 需要）
         self.audio_io = AudioIO(
             sample_rate=self.sample_rate,
             buffer_size=self.buffer_size,
             input_channels=audio_config.get("input_channels", 4),
-            output_channels=audio_config.get("output_channels", 7),  # Will be adjusted by device selection
+            output_channels=audio_config.get("output_channels", 7),
         )
 
         # Set devices if specified
@@ -236,20 +222,8 @@ class VAVController:
                 output_device=audio_config.get("output_device"),
             )
 
-        self.mixer = StereoMixer(num_channels=4)
-        self.audio_analyzer = AudioAnalyzer(
-            sample_rate=self.sample_rate,
-            buffer_size=self.buffer_size,
-        )
-
-        # Initialize Ellen Ripley effect chain
-        print("Warming up Ellen Ripley Numba JIT...")
-        self.ellen_ripley = EllenRipleyEffectChain(sample_rate=self.sample_rate)
-
-        # Pre-warm Numba JIT compilation (prevent first-use audio glitch)
-        dummy_audio = np.zeros((256, 2), dtype=np.float32)
-        _ = self.ellen_ripley.process(dummy_audio[:, 0], dummy_audio[:, 1])
-        print("Ellen Ripley effect chain initialized")
+        # AudioProcess 將在 start() 時創建（需要先選擇裝置）
+        self.audio_process = None
 
         # Initialize region mapper
         self.region_mapper = ContentAwareRegionMapper(
@@ -265,6 +239,12 @@ class VAVController:
         if self.running:
             return
 
+        # Validate audio devices are configured
+        if not self.audio_io:
+            raise RuntimeError("Audio I/O not initialized")
+        if self.audio_io.input_device is None or self.audio_io.output_device is None:
+            raise RuntimeError("Audio devices not configured. Please select devices first.")
+
         print("Starting VAV system...")
         self.running = True
 
@@ -277,12 +257,20 @@ class VAVController:
                 return
             print(f"  Camera opened successfully: device {self.camera.device_id}")
 
+        # 更新 config 中的 channel 數量和裝置 ID（AudioIO 已根據裝置調整）
+        self.config["audio"]["input_channels"] = self.audio_io.input_channels
+        self.config["audio"]["output_channels"] = self.audio_io.output_channels
+        self.config["audio"]["input_device"] = self.audio_io.input_device
+        self.config["audio"]["output_device"] = self.audio_io.output_device
+
+        # 創建並啟動 AudioProcess（使用更新後的 config）
+        print("  Creating audio process...")
+        self.audio_process = AudioProcess(self.config)
+        self.audio_process.start()
+
         # Start vision thread
         self.vision_thread = threading.Thread(target=self._vision_loop, daemon=True)
         self.vision_thread.start()
-
-        # Start audio I/O
-        self.audio_io.start(self._audio_callback)
 
         print("VAV system started")
 
@@ -298,9 +286,9 @@ class VAVController:
         if self.virtual_camera_enabled:
             self.disable_virtual_camera()
 
-        # Stop audio
-        if self.audio_io:
-            self.audio_io.stop()
+        # Stop audio process
+        if self.audio_process:
+            self.audio_process.stop()
 
         # Wait for vision thread
         if self.vision_thread:
@@ -381,8 +369,12 @@ class VAVController:
             # Convert to grayscale for edge detection (from SD or camera, not multiverse)
             gray = cv2.cvtColor(cv_input_frame, cv2.COLOR_BGR2GRAY)
 
-            # Detect and extract contour
-            self.edges = self.contour_cv_generator.detect_and_extract_contour(gray)
+            # Detect and extract contour (每10幀執行一次，避免影響audio thread)
+            if not hasattr(self, '_contour_frame_skip'):
+                self._contour_frame_skip = 0
+            self._contour_frame_skip = (self._contour_frame_skip + 1) % 10
+            if self._contour_frame_skip == 0:
+                self.contour_cv_generator.detect_and_extract_contour(gray)
 
             # Update scan progress and CV values
             current_time = time.time()
@@ -433,9 +425,7 @@ class VAVController:
     def _render_simple(self, frame):
         """Simple visualization: use ContourScanner overlay"""
         # Use ContourScanner's draw_overlay method
-        display_frame = self.contour_cv_generator.draw_overlay(
-            frame, self.edges if self.edges is not None else np.zeros_like(frame[:,:,0])
-        )
+        display_frame = self.contour_cv_generator.draw_overlay(frame, self.cv_values)
         return display_frame
 
     def _render_multiverse(self, frame):
@@ -462,8 +452,7 @@ class VAVController:
         # Detect and extract contour from input_frame (SD or camera) for CV generation
         # This ensures CV generation is based on the processed/styled image
         gray_input = cv2.cvtColor(input_frame, cv2.COLOR_BGR2GRAY)
-        edges_new = self.contour_cv_generator.detect_and_extract_contour(gray_input)
-        self.edges = edges_new  # Update edges to reflect SD processed content
+        self.contour_cv_generator.detect_and_extract_contour(gray_input)
 
         # Prepare channel data for Multiverse renderer
         channels_data = []
@@ -564,10 +553,7 @@ class VAVController:
             rendered_bgr = (result * 255.0).astype(np.uint8)
 
         # Draw CV overlays (contour line, scan position, progress bar) - must be on top
-        rendered_bgr = self.contour_cv_generator.draw_overlay(
-            rendered_bgr,
-            self.edges if self.edges is not None else np.zeros_like(rendered_bgr[:,:,0])
-        )
+        rendered_bgr = self.contour_cv_generator.draw_overlay(rendered_bgr, self.cv_values)
 
         # Add info text
         height, width = rendered_bgr.shape[:2]
@@ -586,16 +572,17 @@ class VAVController:
         return rendered_bgr
 
     def _update_cv_values(self):
-        """Update CV values from contour scanner (continuous output)"""
-        if self.contour_cv_generator:
-            # Store CV values for audio/visual callback
-            # SEQ1/SEQ2: X/Y coordinates (0-1)
-            # ENV1/ENV2/ENV3: contour-based envelopes (0-1)
-            self.cv_values[0] = self.contour_cv_generator.env1_value  # ENV1
-            self.cv_values[1] = self.contour_cv_generator.env2_value  # ENV2
-            self.cv_values[2] = self.contour_cv_generator.env3_value  # ENV3
-            self.cv_values[3] = self.contour_cv_generator.seq1_value  # SEQ1 (X)
-            self.cv_values[4] = self.contour_cv_generator.seq2_value  # SEQ2 (Y)
+        """Update CV values - 發送 SEQ 到 audio process，接收 CV 值用於 GUI"""
+        if self.contour_cv_generator and self.audio_process:
+            # 發送 SEQ1/SEQ2 到獨立的 audio process (normalized 0-1)
+            seq1_normalized = self.contour_cv_generator.seq1_value / 10.0
+            seq2_normalized = self.contour_cv_generator.seq2_value / 10.0
+            self.audio_process.send_cv_values(seq1_normalized, seq2_normalized)
+
+            # 從 audio process 接收 CV 值用於 GUI 顯示
+            cv_from_audio = self.audio_process.get_cv_values()
+            if cv_from_audio is not None:
+                self.cv_values = cv_from_audio
 
             # Trigger CV callback for GUI updates
             if self.cv_callback:
@@ -627,142 +614,22 @@ class VAVController:
         if self.contour_cv_generator:
             self.contour_cv_generator.set_scan_time(scan_time)
 
-    def _update_audio_buffers(self, indata: np.ndarray):
-        """Update audio buffers for Multiverse rendering with frequency detection"""
-        if indata.shape[1] < 2:
-            return
-
-        # Update circular buffers for first 4 input channels
-        with self.audio_buffer_lock:
-            for ch_idx in range(min(4, indata.shape[1])):
-                audio_data = indata[:, ch_idx]
-
-                # Shift buffer and append new data (no pitch shifting, ratio=1.0)
-                shift_amount = len(audio_data)
-                self.audio_buffers[ch_idx] = np.roll(self.audio_buffers[ch_idx], -shift_amount)
-                self.audio_buffers[ch_idx][-shift_amount:] = audio_data * 10.0  # Scale to ±10V range
-
-                # Detect dominant frequency using FFT
-                # Use last 2048 samples for frequency detection
-                fft_size = 2048
-                if len(self.audio_buffers[ch_idx]) >= fft_size:
-                    signal = self.audio_buffers[ch_idx][-fft_size:]
-
-                    # Apply window to reduce spectral leakage
-                    window = np.hanning(fft_size)
-                    windowed_signal = signal * window
-
-                    # Compute FFT
-                    fft = np.fft.rfft(windowed_signal)
-                    magnitude = np.abs(fft)
-
-                    # Find peak frequency (ignore DC and very low frequencies)
-                    min_freq_bin = int(20.0 * fft_size / self.sample_rate)  # 20 Hz
-                    max_freq_bin = int(20000.0 * fft_size / self.sample_rate)  # 20 kHz
-
-                    if max_freq_bin > min_freq_bin:
-                        peak_bin = np.argmax(magnitude[min_freq_bin:max_freq_bin]) + min_freq_bin
-                        detected_freq = peak_bin * self.sample_rate / fft_size
-
-                        # Smooth frequency changes (low-pass filter)
-                        alpha = 0.1  # Smoothing factor
-                        self.audio_frequencies[ch_idx] = (alpha * detected_freq +
-                                                         (1 - alpha) * self.audio_frequencies[ch_idx])
-
-    def _audio_callback(self, indata: np.ndarray, frames: int) -> np.ndarray:
-        """Audio processing callback (runs in audio thread)"""
-        # Update audio buffers for Multiverse rendering
-        self._update_audio_buffers(indata)
-
-        # Process CV generators (sample-accurate)
-        for i in range(frames):
-            # Update envelopes
-            for j, env in enumerate(self.envelopes):
-                self.cv_values[j] = env.process()
-
-            # Update SEQ1/SEQ2 from Contour Scanner
-            if self.contour_cv_generator:
-                self.cv_values[3] = self.contour_cv_generator.seq1_value  # SEQ1
-                self.cv_values[4] = self.contour_cv_generator.seq2_value  # SEQ2
-
-        # CV callback for GUI scope update
-        if self.cv_callback:
-            self.cv_callback(self.cv_values.copy())
-
-        # Mix 4 input channels with individual levels into mono
-        # Each channel is treated as mono, mixed together
-        mixed_mono = np.zeros(frames, dtype=np.float32)
-
-        for i in range(4):
-            if indata.shape[1] > i:
-                # Apply channel level and accumulate
-                mixed_mono += indata[:, i] * self.channel_levels[i]
-
-        # Convert mono to stereo for Ellen Ripley (duplicate to L/R)
-        mixed_left = mixed_mono
-        mixed_right = mixed_mono
-
-        # Process mixed tracks through mixer (for compatibility)
-        track_inputs = [(mixed_left, mixed_right)]
-        for i in range(3):
-            track_inputs.append((np.zeros(frames, dtype=np.float32), np.zeros(frames, dtype=np.float32)))
-
-        left_out, right_out = self.mixer.process(track_inputs)
-
-        # Ellen Ripley master effect chain (if enabled)
-        if self.ellen_ripley_enabled and self.ellen_ripley:
-            left_out, right_out, chaos_cv = self.ellen_ripley.process(left_out, right_out)
-            # TODO: Output chaos_cv if needed
-
-        # Audio analysis for visual feedback
-        features = self.audio_analyzer.analyze(left_out)
-        self.visual_params = self.audio_analyzer.get_visual_parameters(features)
-
-        # Visual callback
-        if self.visual_callback:
-            self.visual_callback(self.visual_params.copy())
-
-        # Build output based on available channels
-        if self.audio_io.output_channels >= 7:
-            # Device supports CV output: [L, R, CV1, CV2, CV3, CV4, CV5]
-            # Convert CV values (0-1) to audio range (-1 to 1) for Eurorack compatibility
-            cv_out = np.zeros((frames, 5), dtype=np.float32)
-            for i in range(5):
-                # Eurorack CV: 0-10V normalized to -1 to +1 range
-                # CV value 0.0 -> -1.0, CV value 1.0 -> +1.0
-                cv_out[:, i] = self.cv_values[i] * 2.0 - 1.0
-
-            output = np.column_stack((left_out, right_out, cv_out))
-        else:
-            # Device only supports stereo: [L, R]
-            output = np.column_stack((left_out, right_out))
-
-        return output
+    # Audio callback 已移至 AudioProcess (獨立 process)
+    # def _update_audio_buffers(...)
+    # def _audio_callback(...)
 
 
+    # Envelope decay 控制透過 AudioProcess 跨 process 通訊
     def set_envelope_decay(self, env_idx: int, decay_time: float):
-        """Set envelope decay time"""
-        if 0 <= env_idx < len(self.envelopes):
-            self.envelopes[env_idx].set_decay_time(decay_time)
+        """設定特定 envelope 的 decay time"""
+        if self.audio_process:
+            self.audio_process.set_envelope_decay(env_idx, decay_time)
 
     def set_global_env_decay(self, decay_time: float):
-        """Set decay time for all envelopes"""
-        for env in self.envelopes:
-            env.set_decay_time(decay_time)
-
-    def set_mixer_params(self, track_idx: int, volume: float = None,
-                        pan: float = None, solo: bool = None, mute: bool = None):
-        """Set mixer track parameters"""
-        if 0 <= track_idx < self.mixer.num_channels:
-            if volume is not None:
-                self.mixer.set_channel_volume(track_idx, volume)
-            if pan is not None:
-                self.mixer.set_channel_pan(track_idx, pan)
-            if solo is not None:
-                self.mixer.set_channel_solo(track_idx, solo)
-            if mute is not None:
-                self.mixer.set_channel_mute(track_idx, mute)
-
+        """設定所有 envelope 的 decay time"""
+        if self.audio_process:
+            for i in range(3):
+                self.audio_process.set_envelope_decay(i, decay_time)
 
     def get_cv_values(self) -> np.ndarray:
         """Get current CV values"""
@@ -900,14 +767,16 @@ class VAVController:
         camera_mix = np.clip(camera_mix, 0.0, 1.0)
         self.renderer_params['camera_mix'] = camera_mix
 
-    # Channel level controls (for audio mixing before Ellen Ripley)
+    # Channel level controls (轉發到 audio process)
     def set_channel_level(self, channel: int, level: float):
         """Set level for a specific channel (0.0-1.0)"""
         if 0 <= channel < 4:
             level = np.clip(level, 0.0, 1.0)
             self.channel_levels[channel] = level
+            if self.audio_process:
+                self.audio_process.set_channel_level(channel, level)
 
-    # Ellen Ripley effect chain controls
+    # Ellen Ripley effect chain controls (轉發到 audio process)
     def enable_ellen_ripley(self, enabled: bool):
         """Enable/disable Ellen Ripley effect chain"""
         self.ellen_ripley_enabled = enabled
@@ -916,28 +785,31 @@ class VAVController:
                                      feedback: float = None, chaos_enabled: bool = None,
                                      wet_dry: float = None):
         """Set Ellen Ripley delay parameters"""
-        if self.ellen_ripley:
-            self.ellen_ripley.set_delay_params(time_l, time_r, feedback, chaos_enabled, wet_dry)
+        if self.audio_process:
+            self.audio_process.set_ellen_ripley_delay_params(
+                time_l, time_r, feedback, chaos_enabled, wet_dry)
 
     def set_ellen_ripley_grain_params(self, size: float = None, density: float = None,
                                      position: float = None, chaos_enabled: bool = None,
                                      wet_dry: float = None):
         """Set Ellen Ripley grain parameters"""
-        if self.ellen_ripley:
-            self.ellen_ripley.set_grain_params(size, density, position, chaos_enabled, wet_dry)
+        if self.audio_process:
+            self.audio_process.set_ellen_ripley_grain_params(
+                size, density, position, chaos_enabled, wet_dry)
 
     def set_ellen_ripley_reverb_params(self, room_size: float = None, damping: float = None,
                                       decay: float = None, chaos_enabled: bool = None,
                                       wet_dry: float = None):
         """Set Ellen Ripley reverb parameters"""
-        if self.ellen_ripley:
-            self.ellen_ripley.set_reverb_params(room_size, damping, decay, chaos_enabled, wet_dry)
+        if self.audio_process:
+            self.audio_process.set_ellen_ripley_reverb_params(
+                room_size, damping, decay, chaos_enabled, wet_dry)
 
     def set_ellen_ripley_chaos_params(self, rate: float = None, amount: float = None,
                                      shape: bool = None):
         """Set Ellen Ripley chaos parameters"""
-        if self.ellen_ripley:
-            self.ellen_ripley.set_chaos_params(rate, amount, shape)
+        if self.audio_process:
+            self.audio_process.set_ellen_ripley_chaos_params(rate, amount, shape)
 
     # Region-based rendering controls
     def enable_region_rendering(self, enabled: bool):

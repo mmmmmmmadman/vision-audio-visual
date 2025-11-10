@@ -2,7 +2,7 @@
 Anchor XY Pad - 2D draggable control widget
 """
 
-from PyQt6.QtWidgets import QWidget
+from PyQt6.QtWidgets import QWidget, QMenu
 from PyQt6.QtCore import Qt, pyqtSignal, QPointF
 from PyQt6.QtGui import QPainter, QPen, QColor, QBrush
 
@@ -17,6 +17,7 @@ class AnchorXYPad(QWidget):
         super().__init__(parent)
         self.x_pct = 50.0  # 0-100
         self.y_pct = 50.0  # 0-100
+        self.range_pct = 50.0  # 1-120 (ROI range)
         self.dragging = False
 
         # Fixed size: 1.5x larger, 16:9 aspect ratio (matching main visual)
@@ -25,13 +26,24 @@ class AnchorXYPad(QWidget):
         self.setMaximumSize(273, 153)
         self.setFixedSize(273, 153)
 
-        # Enable mouse tracking
+        # Enable mouse tracking and context menu
         self.setMouseTracking(True)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
 
-    def set_position(self, x_pct: float, y_pct: float):
+        # MIDI Learn callbacks (set by parent)
+        self.midi_learn_callback = None
+
+    def set_position(self, x_pct: float, y_pct: float, emit_signal: bool = False):
         """Set anchor position (0-100%)"""
         self.x_pct = max(0.0, min(100.0, x_pct))
         self.y_pct = max(0.0, min(100.0, y_pct))
+        if emit_signal:
+            self.position_changed.emit(self.x_pct, self.y_pct)
+        self.update()
+
+    def set_range(self, range_pct: float):
+        """Set ROI range (1-120%)"""
+        self.range_pct = max(1.0, min(120.0, range_pct))
         self.update()
 
     def paintEvent(self, event):
@@ -71,6 +83,22 @@ class AnchorXYPad(QWidget):
         # Calculate anchor pixel position
         anchor_x = margin + (width - margin * 2) * self.x_pct / 100.0
         anchor_y = margin + (height - margin * 2) * self.y_pct / 100.0  # Direct mapping
+
+        # Draw ROI range circle (before anchor point)
+        # range_pct represents diameter percentage of screen width
+        # Calculate radius in pixels (using width as reference, matching contour_scanner logic)
+        pad_width = width - margin * 2
+        pad_height = height - margin * 2
+
+        # range_pct is diameter percentage, so radius is half
+        # Scale to the smaller dimension to keep circle visible
+        reference_size = min(pad_width, pad_height)
+        roi_radius = (reference_size * self.range_pct / 100.0) / 2.0
+
+        # Draw ROI circle
+        painter.setPen(QPen(QColor(100, 200, 255, 180), 2))  # Cyan with transparency
+        painter.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+        painter.drawEllipse(QPointF(anchor_x, anchor_y), roi_radius, roi_radius)
 
         # Draw anchor point (circle)
         painter.setPen(QPen(QColor(255, 255, 255), 2))

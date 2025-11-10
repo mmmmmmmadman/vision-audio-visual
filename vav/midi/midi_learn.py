@@ -151,6 +151,7 @@ class MIDILearnManager:
             ports = mido.get_input_names()
             if not ports:
                 print("⚠ No MIDI input ports available")
+                self.midi_available = False
                 return
 
             # Use first available port
@@ -158,10 +159,11 @@ class MIDILearnManager:
             self.midi_in = mido.open_input(port_name)
             print(f"✓ MIDI input opened: {port_name}")
 
-            # Start MIDI listening thread
-            self.running = True
-            self.midi_thread = threading.Thread(target=self._midi_loop, daemon=True)
-            self.midi_thread.start()
+            # Start MIDI listening thread only if midi_in was successfully opened
+            if self.midi_in:
+                self.running = True
+                self.midi_thread = threading.Thread(target=self._midi_loop, daemon=True)
+                self.midi_thread.start()
 
         except Exception as e:
             print(f"⚠ Failed to start MIDI: {e}")

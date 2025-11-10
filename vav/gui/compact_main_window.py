@@ -5,7 +5,7 @@ Compact Main GUI window for VAV system - optimized layout
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QSlider, QGroupBox, QGridLayout,
-    QComboBox, QCheckBox, QTextEdit, QLineEdit,
+    QComboBox, QCheckBox, QTextEdit, QLineEdit, QMenu,
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QImage, QPixmap
@@ -276,8 +276,8 @@ class CompactMainWindow(QMainWindow):
         slider.setFixedHeight(16)
         slider.setFixedWidth(140)
         self._apply_slider_style(slider, COLOR_COL1)
-        slider.setMinimum(0)
-        slider.setMaximum(50)
+        slider.setMinimum(1)
+        slider.setMaximum(120)
         slider.setValue(50)
         slider.valueChanged.connect(self._on_range_changed)
         self._make_slider_learnable(slider, "range", self._on_range_changed)
@@ -777,6 +777,7 @@ class CompactMainWindow(QMainWindow):
 
         self.er_grain_chaos_checkbox = QCheckBox("Grn Chaos")
         self.er_grain_chaos_checkbox.setFixedHeight(16)
+        self.er_grain_chaos_checkbox.setChecked(True)  # Default ON
         self.er_grain_chaos_checkbox.stateChanged.connect(self._on_er_grain_chaos_changed)
         chaos_row1_layout.addWidget(self.er_grain_chaos_checkbox)
 
@@ -812,6 +813,45 @@ class CompactMainWindow(QMainWindow):
         self.anchor_xy_pad = AnchorXYPad()
         self.anchor_xy_pad.position_changed.connect(self._on_anchor_xy_changed)
         grid.addWidget(self.anchor_xy_pad, row5, COL4, 3, 3)  # Span 3 rows, 3 columns
+
+        # Register Anchor X/Y for MIDI Learn
+        def anchor_x_midi_callback(value):
+            self.anchor_xy_pad.set_position(value, self.anchor_xy_pad.y_pct, emit_signal=True)
+
+        def anchor_y_midi_callback(value):
+            # Invert Y: MIDI 0-100 → GUI 100-0
+            inverted_y = 100.0 - value
+            self.anchor_xy_pad.set_position(self.anchor_xy_pad.x_pct, inverted_y, emit_signal=True)
+
+        self.midi_learn.register_parameter("anchor_x", anchor_x_midi_callback, 0.0, 100.0)
+        self.midi_learn.register_parameter("anchor_y", anchor_y_midi_callback, 0.0, 100.0)
+
+        # Add context menu for XY Pad
+        def show_xy_context_menu(pos):
+            menu = QMenu()
+            learn_x_action = menu.addAction("MIDI Learn X")
+            learn_y_action = menu.addAction("MIDI Learn Y")
+            menu.addSeparator()
+            clear_x_action = menu.addAction("Clear X Mapping")
+            clear_y_action = menu.addAction("Clear Y Mapping")
+            menu.addSeparator()
+            clear_all_action = menu.addAction("Clear All MIDI Mappings")
+
+            action = menu.exec(self.anchor_xy_pad.mapToGlobal(pos))
+
+            if action == learn_x_action:
+                self.midi_learn.enter_learn_mode("anchor_x")
+            elif action == learn_y_action:
+                self.midi_learn.enter_learn_mode("anchor_y")
+            elif action == clear_x_action:
+                self.midi_learn.clear_mapping("anchor_x")
+            elif action == clear_y_action:
+                self.midi_learn.clear_mapping("anchor_y")
+            elif action == clear_all_action:
+                self.midi_learn.clear_all_mappings()
+
+        self.anchor_xy_pad.customContextMenuRequested.connect(show_xy_context_menu)
+
         row5 += 3
 
     def _build_cv_column(self) -> QWidget:
@@ -920,8 +960,8 @@ class CompactMainWindow(QMainWindow):
         label.setFixedWidth(30)
         slider = QSlider(Qt.Orientation.Horizontal)
         slider.setFixedHeight(18)
-        slider.setMinimum(0)
-        slider.setMaximum(50)
+        slider.setMinimum(1)
+        slider.setMaximum(120)
         slider.setValue(50)
         slider.valueChanged.connect(self._on_range_changed)
         value = QLabel("50%")
@@ -1094,7 +1134,7 @@ class CompactMainWindow(QMainWindow):
            self.controller.audio_io.output_device is None:
             # Show device selection dialog
             print("[MainWindow] No devices configured, showing device dialog...")
-            self._on_select_device()
+            self._on_select_devices()
 
             # Check again after device selection
             if not self.controller.audio_io or \
@@ -1105,11 +1145,17 @@ class CompactMainWindow(QMainWindow):
                 return
 
         # Start the system
-        self.controller.start()
-        self.start_btn.setEnabled(False)
-        self.stop_btn.setEnabled(True)
-        self.status_label.setText("Running")
-        self._update_device_status()  # Update device status when starting
+        try:
+            self.controller.start()
+            self.start_btn.setEnabled(False)
+            self.stop_btn.setEnabled(True)
+            self.status_label.setText("Running")
+            self._update_device_status()  # Update device status when starting
+        except Exception as e:
+            print(f"[MainWindow] Failed to start: {e}")
+            self.status_label.setText(f"Start failed: {e}")
+            import traceback
+            traceback.print_exc()
 
     def _on_stop(self):
         self.controller.stop()
@@ -1153,13 +1199,16 @@ class CompactMainWindow(QMainWindow):
 
     def _on_anchor_xy_changed(self, x_pct: float, y_pct: float):
         """Anchor XY position changed from 2D pad"""
+        print(f"🎮 2D PAD: Anchor position changed to ({x_pct:.1f}%, {y_pct:.1f}%)")
         self.controller.set_anchor_position(x_pct, y_pct)
 
     def _on_range_changed(self, value: int):
-        """Sampling range from anchor (0-50%)"""
+        """Sampling range from anchor (1-120%)"""
         self.controller.set_cv_range(float(value))
         _, label = self.range_slider
         label.setText(f"{value}%")
+        # Update XY Pad to show ROI circle
+        self.anchor_xy_pad.set_range(float(value))
 
     def _on_threshold_changed(self, value: int):
         """Edge detection threshold (0-255)"""

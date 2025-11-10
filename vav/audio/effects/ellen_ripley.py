@@ -43,7 +43,7 @@ class EllenRipleyEffectChain:
         self.grain_size = 0.3
         self.grain_density = 0.4
         self.grain_position = 0.5
-        self.grain_chaos_enabled = False
+        self.grain_chaos_enabled = True
         self.grain_wet_dry = 0.0
 
         self.reverb_room_size = 0.5

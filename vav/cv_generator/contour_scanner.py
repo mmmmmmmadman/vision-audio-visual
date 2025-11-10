@@ -67,8 +67,9 @@ class ContourScanner:
         self.detection_width = 1920
         self.detection_height = 1080
 
-        # Sobel 梯度（用於邊緣強度計算）
-        self.sobel_gradient = None
+        # 快取上次找到的所有輪廓，用於快速重新過濾
+        self.cached_contours = []
+
 
     def detect_and_extract_contour(self, gray: np.ndarray):
         """偵測邊緣並提取最主要的輪廓線
@@ -96,9 +97,8 @@ class ContourScanner:
             diff_percentage = (mean_diff / 255.0) * 100.0
             scene_changed = diff_percentage > self.scene_change_threshold
 
-        # 只在錨點range移動或場景變化或首次執行時更新
-        if not (anchor_moved or range_changed or scene_changed or self.prev_gray is None):
-            return self.previous_edges if self.previous_edges is not None else np.zeros_like(gray)
+        # 正常執行邊緣檢測（anchor/range改變也會觸發）
+        params_changed = anchor_moved or range_changed
 
         # 更新追蹤狀態
         self.prev_anchor_x_pct = self.anchor_x_pct
@@ -113,40 +113,49 @@ class ContourScanner:
         # 計算錨點位置和ROI範圍
         anchor_x = int(self.anchor_x_pct * width / 100.0)
         anchor_y = int(self.anchor_y_pct * height / 100.0)
-        # range_pct是ROI半徑的百分比 所以除以2
+        # range_pct 是 ROI 直徑的百分比，所以半徑要除以2
+        # 例如：range_pct=100 表示直徑為畫面寬度，半徑為畫面寬度的一半
         range_x = int(self.range_pct * width / 100.0 / 2.0)
         range_y = int(self.range_pct * height / 100.0 / 2.0)
 
-        # 高斯模糊
-        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        # DEBUG: Monitor sync status
+        if anchor_moved or range_changed:
+            print(f"🔄 ROI UPDATE: Anchor({self.anchor_x_pct:.1f}%, {self.anchor_y_pct:.1f}%) → Pixel({anchor_x}, {anchor_y}), Range={self.range_pct:.0f}% → Radius({range_x}, {range_y})")
 
-        # Canny 邊緣檢測
-        low_threshold = int(self.threshold * 0.5)
-        high_threshold = self.threshold
-        edges = cv2.Canny(blurred, low_threshold, high_threshold)
-
-        # 建立ROI mask 只保留ROI內的邊緣
-        mask = np.zeros_like(edges)
+        # 計算ROI邊界
         roi_x1 = max(0, anchor_x - range_x)
         roi_y1 = max(0, anchor_y - range_y)
         roi_x2 = min(width, anchor_x + range_x)
         roi_y2 = min(height, anchor_y + range_y)
-        mask[roi_y1:roi_y2, roi_x1:roi_x2] = 255
-        edges = cv2.bitwise_and(edges, edges, mask=mask)
+
+        # 只對ROI區域執行高斯模糊和Canny（效能優化）
+        roi_gray = gray[roi_y1:roi_y2, roi_x1:roi_x2]
+        roi_blurred = cv2.GaussianBlur(roi_gray, (5, 5), 0)
+
+        # Canny 邊緣檢測 只在ROI區域執行
+        low_threshold = int(self.threshold * 0.5)
+        high_threshold = self.threshold
+        roi_edges = cv2.Canny(roi_blurred, low_threshold, high_threshold)
+
+        # 形態學閉合操作：連接斷裂的邊緣，讓輪廓更連續
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        roi_edges = cv2.morphologyEx(roi_edges, cv2.MORPH_CLOSE, kernel)
+
+        # 建立完整尺寸的edges圖像 只有ROI區域有內容
+        edges = np.zeros_like(gray)
+        edges[roi_y1:roi_y2, roi_x1:roi_x2] = roi_edges
 
         # 時間平滑
         if self.previous_edges is not None and self.temporal_alpha < 100:
-            alpha = self.temporal_alpha / 100.0
+            # 如果anchor/range改變，提高alpha值加速更新，但不完全跳過平滑
+            if anchor_moved or range_changed:
+                alpha = min(0.9, self.temporal_alpha / 100.0 + 0.3)  # 更快更新
+            else:
+                alpha = self.temporal_alpha / 100.0
             edges = cv2.addWeighted(edges, alpha, self.previous_edges, 1 - alpha, 0)
             edges = edges.astype(np.uint8)
 
         self.previous_edges = edges.copy()
-
-        # 計算 Sobel 梯度（用於強度計算）
-        sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
-        sobely = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
-        self.sobel_gradient = np.sqrt(sobelx**2 + sobely**2)
-        self.sobel_gradient = np.clip(self.sobel_gradient, 0, 255).astype(np.uint8)
 
         # 找輪廓 現在只會找到ROI內的輪廓
         contours, hierarchy = cv2.findContours(
@@ -159,21 +168,39 @@ class ContourScanner:
             self.contour_points = []
             return edges
 
-        # 過濾太短的輪廓
-        valid_contours = [c for c in contours if len(c) > 10]
+        # 過濾太短的輪廓（最小限制：至少 2 個點）
+        valid_contours = [c for c in contours if len(c) > 1]
 
         if not valid_contours:
             self.contour_points = []
+            self.cached_contours = []
             return edges
 
-        # 選擇最長的輪廓
-        longest_contour = max(valid_contours, key=len)
+        # 快取找到的輪廓，供快速重新過濾使用
+        self.cached_contours = valid_contours
 
-        # 轉換為點列表
-        self.contour_points = []
-        for point in longest_contour:
-            x, y = point[0]
-            self.contour_points.append((int(x), int(y)))
+        # 簡單邏輯：過濾所有輪廓，只保留在 ROI 內的點，選最長的
+        anchor_x = int(self.anchor_x_pct * width / 100.0)
+        anchor_y = int(self.anchor_y_pct * height / 100.0)
+        range_radius = ((range_x ** 2 + range_y ** 2) ** 0.5)
+        range_radius_sq = range_radius ** 2  # 用平方比較，避免開根號
+
+        # 對每個輪廓，過濾出在 ROI 內的點
+        best_filtered_contour = []
+
+        for contour in valid_contours:
+            filtered_points = []
+            for point in contour:
+                x, y = point[0]
+                dist_sq = (x - anchor_x) ** 2 + (y - anchor_y) ** 2  # 不開根號，直接比較平方
+                if dist_sq <= range_radius_sq:
+                    filtered_points.append((int(x), int(y)))
+
+            # 選擇過濾後最長的輪廓
+            if len(filtered_points) > len(best_filtered_contour):
+                best_filtered_contour = filtered_points
+
+        self.contour_points = best_filtered_contour
 
         return edges
 
@@ -339,12 +366,12 @@ class ContourScanner:
 
         self.trigger_rings = new_rings
 
-    def draw_overlay(self, frame: np.ndarray, edges: np.ndarray) -> np.ndarray:
+    def draw_overlay(self, frame: np.ndarray, cv_values: np.ndarray = None) -> np.ndarray:
         """繪製輪廓掃描視覺化
 
         Args:
             frame: 原始畫面（BGR）
-            edges: 邊緣檢測結果
+            cv_values: CV 值陣列 [ENV1, ENV2, ENV3, SEQ1, SEQ2] (0-1 range)
 
         Returns:
             疊加後的畫面
@@ -356,38 +383,63 @@ class ContourScanner:
         scale_x = frame_width / self.detection_width if self.detection_width > 0 else 1.0
         scale_y = frame_height / self.detection_height if self.detection_height > 0 else 1.0
 
-        # 繪製輪廓線 黑線與白線並存 加粗兩倍
+        # 繪製輪廓線 黑線與白線並存
         if len(self.contour_points) > 1:
             scaled_points = [(int(x * scale_x), int(y * scale_y)) for x, y in self.contour_points]
             points = np.array(scaled_points, dtype=np.int32)
-            # 先畫黑色粗線
-            cv2.polylines(output, [points], False, (0, 0, 0), 8)
-            # 再畫白色細線
-            cv2.polylines(output, [points], False, (255, 255, 255), 4)
+            # 先畫白色粗線（底）- 6 像素
+            cv2.polylines(output, [points], False, (255, 255, 255), 6)
+            # 再畫黑色細線（上）- 2 像素
+            cv2.polylines(output, [points], False, (0, 0, 0), 2)
 
-        # 繪製當前掃描點 黑色與白色十字並存 加粗兩倍
+        # 繪製當前掃描點：黑邊→白邊→粉紅填充的三層十字
         if self.current_scan_pos is not None:
             scan_x_scaled = int(self.current_scan_pos[0] * scale_x)
             scan_y_scaled = int(self.current_scan_pos[1] * scale_y)
             cross_size = 20
-            # 黑色十字
+
+            # 第一層：黑色外框（最粗）
             cv2.line(output,
                     (scan_x_scaled - cross_size, scan_y_scaled),
                     (scan_x_scaled + cross_size, scan_y_scaled),
-                    (0, 0, 0), 8)
+                    (0, 0, 0), 10)
             cv2.line(output,
                     (scan_x_scaled, scan_y_scaled - cross_size),
                     (scan_x_scaled, scan_y_scaled + cross_size),
-                    (0, 0, 0), 8)
-            # 白色十字
+                    (0, 0, 0), 10)
+
+            # 第二層：白色邊框（中等）
             cv2.line(output,
                     (scan_x_scaled - cross_size, scan_y_scaled),
                     (scan_x_scaled + cross_size, scan_y_scaled),
-                    (255, 255, 255), 4)
+                    (255, 255, 255), 6)
             cv2.line(output,
                     (scan_x_scaled, scan_y_scaled - cross_size),
                     (scan_x_scaled, scan_y_scaled + cross_size),
-                    (255, 255, 255), 4)
+                    (255, 255, 255), 6)
+
+            # 第三層：粉紅色填充（最細，內部）
+            cv2.line(output,
+                    (scan_x_scaled - cross_size, scan_y_scaled),
+                    (scan_x_scaled + cross_size, scan_y_scaled),
+                    (133, 133, 255), 3)
+            cv2.line(output,
+                    (scan_x_scaled, scan_y_scaled - cross_size),
+                    (scan_x_scaled, scan_y_scaled + cross_size),
+                    (133, 133, 255), 3)
+
+        # 繪製 ROI 圓圈（錨點範圍）
+        anchor_x = int(self.anchor_x_pct * frame_width / 100.0)
+        anchor_y = int(self.anchor_y_pct * frame_height / 100.0)
+        range_radius_x = int(self.range_pct * frame_width / 100.0 / 2.0)
+        range_radius_y = int(self.range_pct * frame_height / 100.0 / 2.0)
+        # 使用平均半徑繪製圓形 ROI
+        range_radius = int((range_radius_x + range_radius_y) / 2)
+
+        # 繪製半透明 ROI 圓圈（白色半透明 1px）
+        overlay = output.copy()
+        cv2.circle(overlay, (anchor_x, anchor_y), range_radius, (255, 255, 255), 1)
+        cv2.addWeighted(overlay, 0.5, output, 0.5, 0, output)
 
         # 繪製觸發光圈
         for ring in self.trigger_rings:
@@ -403,20 +455,11 @@ class ContourScanner:
             cv2.circle(overlay, (pos_x_scaled, pos_y_scaled), radius_scaled, color, 3)
             cv2.addWeighted(overlay, alpha, output, 1 - alpha, 0, output)
 
-        # 繪製錨點（粉白圓圈）
-        anchor_x = int(self.anchor_x_pct * frame_width / 100.0)
-        anchor_y = int(self.anchor_y_pct * frame_height / 100.0)
-        cv2.circle(output, (anchor_x, anchor_y), 6, (255, 255, 255), 2)
-        overlay = output.copy()
-        cv2.circle(overlay, (anchor_x, anchor_y), 6, (255, 133, 133), -1)
-        cv2.addWeighted(overlay, 0.8, output, 0.2, 0, output)
-        cv2.circle(output, (anchor_x, anchor_y), 3, (255, 255, 255), 1)
-
         # 繪製掃描進度條
         self._draw_scan_progress(output)
 
         # 繪製 CV 數據面板
-        self._draw_data_dashboard(output)
+        self._draw_data_dashboard(output, cv_values)
 
         return output
 
@@ -449,8 +492,13 @@ class ContourScanner:
         cv2.putText(frame, text, (bar_x + bar_width + 10, bar_y + 12),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
 
-    def _draw_data_dashboard(self, frame: np.ndarray):
-        """繪製 CV 數據面板"""
+    def _draw_data_dashboard(self, frame: np.ndarray, cv_values: np.ndarray = None):
+        """繪製 CV 數據面板
+
+        Args:
+            frame: 畫面
+            cv_values: CV 值陣列 [ENV1, ENV2, ENV3, SEQ1, SEQ2] (0-1 range)
+        """
         panel_x = 10
         panel_y = 10
         panel_width = 280
@@ -487,29 +535,43 @@ class ContourScanner:
                    font, font_scale, value_color, font_thickness)
         y_offset += line_height
 
-        # SEQ1 (X座標)
-        self._draw_cv_bar(frame, panel_x, y_offset, "SEQ1",
-                         self.seq1_value, CV_COLORS_BGR['SEQ1'])
-        y_offset += line_height
-
-        # SEQ2 (Y座標)
-        self._draw_cv_bar(frame, panel_x, y_offset, "SEQ2",
-                         self.seq2_value, CV_COLORS_BGR['SEQ2'])
-        y_offset += line_height
+        # 使用從 audio process 傳來的 CV 值 如果沒有則用本地值
+        if cv_values is not None and len(cv_values) >= 5:
+            env1_val = cv_values[0] * 10.0  # 轉換為 0-10V
+            env2_val = cv_values[1] * 10.0
+            env3_val = cv_values[2] * 10.0
+            seq1_val = cv_values[3] * 10.0
+            seq2_val = cv_values[4] * 10.0
+        else:
+            env1_val = self.env1_value
+            env2_val = self.env2_value
+            env3_val = self.env3_value
+            seq1_val = self.seq1_value
+            seq2_val = self.seq2_value
 
         # ENV1 (X > Y)
         self._draw_cv_bar(frame, panel_x, y_offset, "ENV1 (X>Y)",
-                         self.env1_value, CV_COLORS_BGR['ENV1'])
+                         env1_val, CV_COLORS_BGR['ENV1'])
         y_offset += line_height
 
         # ENV2 (Y > X)
         self._draw_cv_bar(frame, panel_x, y_offset, "ENV2 (Y>X)",
-                         self.env2_value, CV_COLORS_BGR['ENV2'])
+                         env2_val, CV_COLORS_BGR['ENV2'])
         y_offset += line_height
 
         # ENV3 (對角線)
         self._draw_cv_bar(frame, panel_x, y_offset, "ENV3 (X=Y)",
-                         self.env3_value, CV_COLORS_BGR['ENV3'])
+                         env3_val, CV_COLORS_BGR['ENV3'])
+        y_offset += line_height
+
+        # SEQ1 (X座標)
+        self._draw_cv_bar(frame, panel_x, y_offset, "SEQ1",
+                         seq1_val, CV_COLORS_BGR['SEQ1'])
+        y_offset += line_height
+
+        # SEQ2 (Y座標)
+        self._draw_cv_bar(frame, panel_x, y_offset, "SEQ2",
+                         seq2_val, CV_COLORS_BGR['SEQ2'])
 
     def _draw_cv_bar(self, frame: np.ndarray, panel_x: int, y_offset: int,
                      label: str, value: float, color: Tuple[int, int, int]):
@@ -561,7 +623,7 @@ class ContourScanner:
         self.anchor_y_pct = np.clip(y_pct, 0, 100)
 
     def set_range(self, range_pct: float):
-        self.range_pct = np.clip(range_pct, 0, 100)
+        self.range_pct = np.clip(range_pct, 1, 120)
 
     def set_scan_time(self, scan_time: float):
         """設定掃描時間（秒）"""
