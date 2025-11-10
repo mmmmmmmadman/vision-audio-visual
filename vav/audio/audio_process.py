@@ -27,7 +27,8 @@ def audio_process_worker(
     cv_output_queue: mp.Queue,
     control_queue: mp.Queue,
     config: dict,
-    stop_event: mp.Event
+    stop_event: mp.Event,
+    shared_audio_buffers: list
 ):
     """
     獨立 process 的 worker function
@@ -38,12 +39,24 @@ def audio_process_worker(
         control_queue: 接收控制訊息 (envelope decay 等)
         config: 音訊設定
         stop_event: 停止信號
+        shared_audio_buffers: shared memory buffers for display (4 channels)
     """
 
     # 初始化音訊系統
     audio_config = config.get("audio", {})
     sample_rate = audio_config.get("sample_rate", 48000)
     buffer_size = audio_config.get("buffer_size", 256)
+
+    # Display buffer parameters (matching Multiverse.cpp)
+    # Show 50ms of data for smooth visualization
+    MS_PER_SCREEN = 50.0
+    DISPLAY_WIDTH = len(shared_audio_buffers[0]) if shared_audio_buffers else 1920
+    samples_per_screen = sample_rate * MS_PER_SCREEN / 1000.0
+    samples_per_pixel = samples_per_screen / DISPLAY_WIDTH
+
+    # Per-channel display state
+    display_buffer_indices = [0] * 4  # Current write position in circular buffer
+    frame_counters = [0.0] * 4  # Frame accumulator for downsampling
 
     # 從 config 取得正確的 channel 數量和裝置 ID
     input_channels = audio_config.get("input_channels", 4)
@@ -235,6 +248,30 @@ def audio_process_worker(
             for i in range(5):
                 outdata[:, 2 + i] = cv_values[i]  # 0-1 範圍對應 0-10V
 
+        # Update display buffer (circular buffer with downsampling, matching Multiverse.cpp)
+        # This prevents visual flickering by downsampling audio to display resolution
+        for ch in range(4):
+            if indata.shape[1] > ch:
+                # Process each sample in the audio buffer
+                for sample_idx in range(frames):
+                    voltage = indata[sample_idx, ch]
+
+                    # Increment frame counter
+                    frame_counters[ch] += 1.0
+
+                    # Write to display buffer when accumulated enough samples
+                    if frame_counters[ch] >= samples_per_pixel:
+                        # Write to circular buffer
+                        buffer_idx = display_buffer_indices[ch]
+
+                        # Get shared memory view and write sample
+                        shared_np = np.frombuffer(shared_audio_buffers[ch], dtype=np.float32)
+                        shared_np[buffer_idx] = voltage
+
+                        # Advance circular buffer index
+                        display_buffer_indices[ch] = (buffer_idx + 1) % DISPLAY_WIDTH
+                        frame_counters[ch] = 0.0
+
         return outdata
 
     # 啟動 audio stream
@@ -267,6 +304,15 @@ class AudioProcess:
         self.stop_event: Optional[mp.Event] = None
         self.running = False
 
+        # Shared memory for audio buffers (for Multiverse)
+        # Use display width from camera config, default to 1920
+        camera_config = config.get("camera", {})
+        display_width = camera_config.get("width", 1920)
+        self.shared_audio_buffers = [
+            mp.RawArray('f', display_width) for _ in range(4)
+        ]
+        print(f"[AudioProcess] Created shared display buffers: {display_width} samples per channel")
+
     def start(self):
         """啟動 audio process"""
         if self.running:
@@ -281,7 +327,7 @@ class AudioProcess:
         # 啟動 process
         self.process = mp.Process(
             target=audio_process_worker,
-            args=(self.cv_queue, self.cv_output_queue, self.control_queue, self.config, self.stop_event),
+            args=(self.cv_queue, self.cv_output_queue, self.control_queue, self.config, self.stop_event, self.shared_audio_buffers),
             daemon=False  # 不是 daemon，確保正常關閉
         )
         self.process.start()

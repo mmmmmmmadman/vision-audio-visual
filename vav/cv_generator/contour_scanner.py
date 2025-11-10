@@ -447,51 +447,27 @@ class ContourScanner:
                     (scan_x_scaled, scan_y_scaled + cross_size),
                     (133, 133, 255), 3)
 
-        # 繪製 ROI 圓圈（錨點範圍）帶模糊效果和暗化外圍
+        # PERFORMANCE: ROI 圓圈和 CV meter 已停用以提升效能
+        # 保留錨點計算供內部使用
         anchor_x = int(self.anchor_x_pct * frame_width / 100.0)
         anchor_y = int(self.anchor_y_pct * frame_height / 100.0)
         range_radius_x = int(self.range_pct * frame_width / 100.0 / 2.0)
         range_radius_y = int(self.range_pct * frame_height / 100.0 / 2.0)
-        # 使用平均半徑繪製圓形 ROI
         range_radius = int((range_radius_x + range_radius_y) / 2)
 
-        # 先將 ROI 外圍稍微變暗（使用遮罩）
-        mask = np.zeros((frame_height, frame_width), dtype=np.uint8)
-        cv2.circle(mask, (anchor_x, anchor_y), range_radius + 5, 255, -1)
-
-        # 反轉遮罩得到 ROI 外圍區域
-        mask_inv = cv2.bitwise_not(mask)
-
-        # 將外圍區域變暗 (使用設定的亮度值)
-        darkened = output.copy()
-        darkened = (darkened * self.roi_vignette_brightness).astype(np.uint8)
-
-        # 合併：ROI 內保持原樣，外圍變暗
-        output = np.where(mask_inv[:, :, np.newaxis] > 0, darkened, output)
-
-        # 繪製模糊 ROI 圓圈（主線清晰 周圍柔和）
-        # 先繪製柔和的外圍層
-        blur_layers = [
-            (range_radius + 4, 0.05),  # 最外層
-            (range_radius + 3, 0.08),
-            (range_radius + 2, 0.11),
-            (range_radius + 1, 0.13),
-            (range_radius - 1, 0.13),
-            (range_radius - 2, 0.11),
-            (range_radius - 3, 0.08),
-            (range_radius - 4, 0.05),  # 最內層
-        ]
-
-        for radius, alpha in blur_layers:
-            if radius > 0:
-                overlay = output.copy()
-                cv2.circle(overlay, (anchor_x, anchor_y), radius, (255, 255, 255), 1)
-                cv2.addWeighted(overlay, alpha, output, 1.0, 0, output)
-
-        # 最後繪製主線 1px 清晰線條
-        overlay = output.copy()
-        cv2.circle(overlay, (anchor_x, anchor_y), range_radius, (255, 255, 255), 1)
-        cv2.addWeighted(overlay, 0.5, output, 0.5, 0, output)
+        # ROI 圓圈繪製已停用（節省約 30-40ms）
+        # # 先將 ROI 外圍稍微變暗（使用遮罩）
+        # mask = np.zeros((frame_height, frame_width), dtype=np.uint8)
+        # cv2.circle(mask, (anchor_x, anchor_y), range_radius + 5, 255, -1)
+        # mask_inv = cv2.bitwise_not(mask)
+        # darkened = output.copy()
+        # darkened = (darkened * self.roi_vignette_brightness).astype(np.uint8)
+        # output = np.where(mask_inv[:, :, np.newaxis] > 0, darkened, output)
+        #
+        # # 繪製模糊 ROI 圓圈
+        # blur_layers = [...]
+        # for radius, alpha in blur_layers:
+        #     ...
 
         # 繪製觸發光圈
         for ring in self.trigger_rings:
@@ -507,11 +483,11 @@ class ContourScanner:
             cv2.circle(overlay, (pos_x_scaled, pos_y_scaled), radius_scaled, color, 3)
             cv2.addWeighted(overlay, alpha, output, 1 - alpha, 0, output)
 
-        # 繪製掃描進度條
-        self._draw_scan_progress(output)
+        # 掃描進度條已停用
+        # self._draw_scan_progress(output)
 
-        # 繪製 CV 數據面板
-        self._draw_data_dashboard(output, cv_values)
+        # CV 數據面板已停用
+        # self._draw_data_dashboard(output, cv_values)
 
         return output
 

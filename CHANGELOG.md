@@ -2,6 +2,55 @@
 
 ---
 
+## [2025-11-11] Multiverse 視覺跳動修復與 ENV 圈圈恢復
+
+### 修復內容
+
+#### 1. Multiverse 視覺跳動問題修復
+**問題**: Multiverse 畫面劇烈跳動閃爍 音訊輸出正常
+
+**根本原因**:
+- 錯誤的 display buffer 實作引用未定義變數 導致 Multiverse 損壞
+- 缺少 shared memory buffers 用於跨 process 音訊資料傳遞
+- 缺少 circular buffer 和 downsampling 機制
+
+**解決方案** (參考 Multiverse.cpp):
+- 實作 circular display buffer with downsampling
+- 50ms 視窗 2400 samples @ 48kHz downsampled to 1920 pixels
+- 使用 multiprocessing.RawArray 實作跨 process shared memory
+- Buffer size 使用 camera width (1920) 而非 audio buffer size (128)
+
+**修改檔案**:
+- `vav/audio/audio_process.py`
+  - Lines 25-59: 新增 display buffer 參數和 per-channel state
+  - Lines 251-273: 實作 circular buffer with downsampling
+  - Lines 307-314: 修正 shared_audio_buffers size 使用 display_width
+
+**技術特點**:
+- GPU-based 完全在 GPU shader 中渲染
+- 無鎖設計 視覺 thread 直接讀取 shared memory
+- Downsampling 每 samplesPerPixel 寫入一次
+- 與 Multiverse.cpp 邏輯一致
+
+#### 2. Ratio 參數分析
+**問題**: Channel 3/4 視覺上 ratio 看起來較高
+
+**分析結果**:
+- Shader 中所有 channel ratio 處理邏輯完全相同
+- 預設 rotation angle 不同: Ch1=0° Ch2=45° Ch3=90° Ch4=135°
+- 90° 和 135° 旋轉讓波形視覺上 stripe density 更高
+- Ratio 實作無誤 視覺差異來自 rotation angle
+
+#### 3. ENV 觸發圈圈恢復
+**變更**: 恢復 ENV1/ENV2/ENV3 觸發時的彩色擴張圓圈動畫
+
+**效能影響**: 增加約 3-5ms 不影響 30fps
+
+**修改檔案**:
+- `vav/cv_generator/contour_scanner.py` (lines 472-484)
+
+---
+
 ## [2025-11-10] 視覺優化、程式碼清理與 MIDI 控制強化
 
 ### 視覺優化

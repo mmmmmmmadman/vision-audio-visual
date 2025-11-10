@@ -494,9 +494,10 @@ class CompactMainWindow(QMainWindow):
         row3 = 0
         self.channel_curve_sliders = []
         self.channel_angle_sliders = []
+        self.channel_ratio_sliders = []
         default_angles = [180, 225, 270, 315]
 
-        # Create all 4 channels with vertical layout (Curve, Angle in separate rows)
+        # Create all 4 channels with vertical layout (Curve, Angle, Ratio in separate rows)
         for i in range(4):
             # Curve
             grid.addWidget(QLabel(f"Ch{i+1} Curve"), row3, COL3)
@@ -532,6 +533,24 @@ class CompactMainWindow(QMainWindow):
             angle_label.setFixedWidth(30)
             grid.addWidget(angle_label, row3, COL3 + 2)
             self.channel_angle_sliders.append((angle_slider, angle_label))
+            row3 += 1
+
+            # Ratio
+            grid.addWidget(QLabel(f"Ch{i+1} Ratio"), row3, COL3)
+            ratio_slider = QSlider(Qt.Orientation.Horizontal)
+            ratio_slider.setFixedHeight(16)
+            ratio_slider.setFixedWidth(120)
+            self._apply_slider_style(ratio_slider, COLOR_COL3)
+            ratio_slider.setMinimum(25)  # 0.25
+            ratio_slider.setMaximum(1000)  # 10.0
+            ratio_slider.setValue(100)  # 1.0
+            ratio_slider.valueChanged.connect(lambda val, idx=i: self._on_channel_ratio_changed(idx, val))
+            self._make_slider_learnable(ratio_slider, f"ch{i+1}_ratio", lambda val, idx=i: self._on_channel_ratio_changed(idx, val))
+            grid.addWidget(ratio_slider, row3, COL3 + 1)
+            ratio_label = QLabel("1.0")
+            ratio_label.setFixedWidth(25)
+            grid.addWidget(ratio_label, row3, COL3 + 2)
+            self.channel_ratio_sliders.append((ratio_slider, ratio_label))
             row3 += 1
 
         # ===== COLUMN 4: Ellen Ripley Delay+Grain =====
@@ -1433,6 +1452,13 @@ class CompactMainWindow(QMainWindow):
         # Map 0-360 to -180 to +180 (like original Multiverse)
         mapped_angle = float(value) - 180.0
         self.controller.set_renderer_channel_angle(channel, mapped_angle)
+
+    def _on_channel_ratio_changed(self, channel: int, value: int):
+        """Channel ratio changed"""
+        ratio = value / 100.0
+        _, label = self.channel_ratio_sliders[channel]
+        label.setText(f"{ratio:.1f}")
+        self.controller.set_renderer_channel_ratio(channel, ratio)
 
     def _on_camera_mix_changed(self, value: int):
         """Camera mix changed"""

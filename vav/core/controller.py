@@ -66,6 +66,7 @@ class VAVController:
             'channel_curves': [0.0, 0.0, 0.0, 0.0],  # Curve for 4 channels (0-1)
             'channel_angles': [0.0, 45.0, 90.0, 135.0],  # Rotation angles for 4 channels
             'channel_intensities': [1.0, 1.0, 1.0, 1.0],  # Intensity for 4 channels
+            'channel_ratios': [1.0, 1.0, 1.0, 1.0],  # Ratio for 4 channels (stripe density)
             'camera_mix': 0.0,  # 0.0=pure multiverse, 1.0=pure camera, blend in between
         }
 
@@ -363,7 +364,18 @@ class VAVController:
 
             self.current_frame = frame
 
+            # Timing for detailed profiling
+            t_sd = 0.0
+            t_gray = 0.0
+            t_contour = 0.0
+            t_update_cv = 0.0
+            t_rings = 0.0
+            t_draw = 0.0
+            t_callback = 0.0
+            t_vcam = 0.0
+
             # Determine CV detection source: SD output (if available) or camera
+            t0 = time.time()
             cv_input_frame = frame  # Default: use camera frame
             if self.sd_enabled and self.sd_img2img:
                 sd_output = self.sd_img2img.get_current_output()
@@ -373,18 +385,24 @@ class VAVController:
                         cv_input_frame = cv2.resize(sd_output, (frame.shape[1], frame.shape[0]))
                     else:
                         cv_input_frame = sd_output
+            t_sd = (time.time() - t0) * 1000
 
             # Convert to grayscale for edge detection (from SD or camera, not multiverse)
+            t0 = time.time()
             gray = cv2.cvtColor(cv_input_frame, cv2.COLOR_BGR2GRAY)
+            t_gray = (time.time() - t0) * 1000
 
             # Detect and extract contour (每10幀執行一次，避免影響audio thread)
+            t0 = time.time()
             if not hasattr(self, '_contour_frame_skip'):
                 self._contour_frame_skip = 0
             self._contour_frame_skip = (self._contour_frame_skip + 1) % 10
             if self._contour_frame_skip == 0:
                 self.contour_cv_generator.detect_and_extract_contour(gray)
+            t_contour = (time.time() - t0) * 1000
 
             # Update scan progress and CV values
+            t0 = time.time()
             current_time = time.time()
             dt_since_last_update = current_time - last_cv_update
             if dt_since_last_update >= cv_update_time:
@@ -397,21 +415,29 @@ class VAVController:
                 )
                 self._update_cv_values()
                 last_cv_update = current_time
+            t_update_cv = (time.time() - t0) * 1000
 
             # Update trigger ring animations (每幀都要更新以保持流暢)
+            t0 = time.time()
             frame_dt = current_time - last_frame_time if last_frame_time > 0 else 1.0/60.0
             self.contour_cv_generator.update_trigger_rings(frame_dt)
             last_frame_time = current_time
+            t_rings = (time.time() - t0) * 1000
 
             # Generate visualization frame (for both GUI and virtual camera)
             # Edge detection is now done inside Multiverse rendering (based on SD processed frame)
+            t0 = time.time()
             display_frame = self._draw_visualization(frame)
+            t_draw = (time.time() - t0) * 1000
 
             # Callback for GUI frame update (send visualization, not raw frame)
+            t0 = time.time()
             if self.frame_callback:
                 self.frame_callback(display_frame)
+            t_callback = (time.time() - t0) * 1000
 
             # Output to virtual camera if enabled
+            t0 = time.time()
             if self.virtual_camera_enabled and self.virtual_camera is not None:
                 try:
                     # Convert BGR to RGB for virtual camera (fast method)
@@ -422,9 +448,26 @@ class VAVController:
                     # Disable virtual camera on error
                     self.virtual_camera_enabled = False
                     self.virtual_camera = None
+            t_vcam = (time.time() - t0) * 1000
 
             # Maintain frame rate
             elapsed = time.time() - start_time
+            elapsed_ms = elapsed * 1000
+
+            # Performance logging every 100 processed frames
+            if not hasattr(self, '_vision_perf_counter'):
+                self._vision_perf_counter = 0
+                self._vision_render_time = 0.0
+
+            self._vision_perf_counter += 1
+            if hasattr(self, 't_render'):
+                self._vision_render_time = self.t_render  # Store latest render time
+
+            if self._vision_perf_counter % 100 == 0:
+                overhead = elapsed_ms - self._vision_render_time
+                print(f"[PERF] Vision loop: total={elapsed_ms:.2f}ms (render={self._vision_render_time:.2f}ms, overhead={overhead:.2f}ms), target={frame_time*1000:.2f}ms")
+                print(f"[PERF] Breakdown: SD={t_sd:.2f}ms, gray={t_gray:.2f}ms, contour={t_contour:.2f}ms, update_cv={t_update_cv:.2f}ms, rings={t_rings:.2f}ms, draw={t_draw:.2f}ms, callback={t_callback:.2f}ms, vcam={t_vcam:.2f}ms")
+
             sleep_time = frame_time - elapsed
             if sleep_time > 0:
                 time.sleep(sleep_time)
@@ -447,7 +490,19 @@ class VAVController:
         if self.renderer is None:
             return self._render_simple(frame)
 
+        # Timing for detailed profiling
+        t_sd_proc = 0.0
+        t_contour_dup = 0.0
+        t_prepare_ch = 0.0
+        t_region = 0.0
+        t_render_call = 0.0
+        t_rgb2bgr = 0.0
+        t_blend = 0.0
+        t_overlay = 0.0
+        t_text = 0.0
+
         # Process SD img2img first (if enabled) - SD processes camera frame, not rendered output
+        t0 = time.time()
         input_frame = frame  # Default: use camera frame
         if self.sd_enabled and self.sd_img2img:
             # Feed camera frame to SD process
@@ -462,33 +517,52 @@ class VAVController:
                 if sd_output.shape[:2] != frame.shape[:2]:
                     sd_output = cv2.resize(sd_output, (frame.shape[1], frame.shape[0]))
                 input_frame = sd_output
+        t_sd_proc = (time.time() - t0) * 1000
 
-        # Detect and extract contour from input_frame (SD or camera) for CV generation
-        # This ensures CV generation is based on the processed/styled image
-        gray_input = cv2.cvtColor(input_frame, cv2.COLOR_BGR2GRAY)
-        self.contour_cv_generator.detect_and_extract_contour(gray_input)
+        # NOTE: 移除重複的 contour detection（在 vision loop 中已做過）
+        # 這個重複操作浪費了 40ms！
+        # gray_input = cv2.cvtColor(input_frame, cv2.COLOR_BGR2GRAY)
+        # self.contour_cv_generator.detect_and_extract_contour(gray_input)
+        t_contour_dup = 0.0
 
         # Prepare channel data for Multiverse renderer
+        t0 = time.time()
         channels_data = []
 
-        # Use real audio buffers (thread-safe access)
-        with self.audio_buffer_lock:
-            audio_buffers_copy = [buf.copy() for buf in self.audio_buffers]
-            frequencies_copy = self.audio_frequencies.copy()
+        # Read audio from shared memory (無鎖，可能有 tearing 但視覺可接受)
+        audio_buffers_copy = []
+        if self.audio_process and hasattr(self.audio_process, 'shared_audio_buffers'):
+            for i in range(4):
+                shared_np = np.frombuffer(self.audio_process.shared_audio_buffers[i], dtype=np.float32)
+                audio_buffer = shared_np.copy()
 
-        # Enable all 4 channels based on user intensity
+                # TODO: ratio resampling需要實作類似cpp的circular display buffer機制
+                # 目前direct copy避免閃爍
+                audio_buffers_copy.append(audio_buffer)
+        else:
+            # Fallback: zeros
+            audio_buffers_copy = [np.zeros(self.audio_buffer_size, dtype=np.float32) for _ in range(4)]
+
+        frequencies_copy = self.audio_frequencies.copy()
+
+        # Enable all 4 channels based on user intensity (CV modulation disabled)
         for ch_idx in range(4):
             # Check if user intensity is near zero (disable channel)
             user_intensity = self.renderer_params['channel_intensities'][ch_idx]
             if user_intensity < 0.01:
                 channels_data.append({'enabled': False})
             else:
-                # Get envelope value for intensity modulation
-                env_idx = ch_idx % 3
-                base_intensity = 0.8  # Base intensity
-                env_value = self.cv_values[env_idx] if env_idx < 3 else 0.5
-                intensity = base_intensity + (env_value * 0.7)  # 0.8 to 1.5 range
-                intensity = float(np.clip(intensity * user_intensity, 0.0, 2.0))
+                # 直接使用 user_intensity，不使用 envelope 調變
+                intensity = float(user_intensity)
+
+                # DEBUG: 每 500 幀記錄一次 (降低頻率提升效能)
+                if hasattr(self, '_multiverse_debug_counter'):
+                    self._multiverse_debug_counter += 1
+                else:
+                    self._multiverse_debug_counter = 0
+
+                if self._multiverse_debug_counter == 500:
+                    print(f"[Multiverse DEBUG] Ch{ch_idx}: audio_len={len(audio_buffers_copy[ch_idx])}, audio_range=[{audio_buffers_copy[ch_idx].min():.2f}, {audio_buffers_copy[ch_idx].max():.2f}]")
 
                 channels_data.append({
                     'enabled': True,
@@ -497,9 +571,12 @@ class VAVController:
                     'intensity': intensity,
                     'curve': self.renderer_params['channel_curves'][ch_idx],
                     'angle': self.renderer_params['channel_angles'][ch_idx],
+                    'ratio': self.renderer_params['channel_ratios'][ch_idx],
                 })
+        t_prepare_ch = (time.time() - t0) * 1000
 
         # Generate region map using input_frame (SD or camera) if region rendering is enabled
+        t0 = time.time()
         region_map = None
         if self.use_region_rendering and self.region_mapper:
             if self.region_mode == 'brightness':
@@ -510,27 +587,34 @@ class VAVController:
                 region_map = self.region_mapper.create_quadrant_regions(input_frame)
             elif self.region_mode == 'edge':
                 region_map = self.region_mapper.create_edge_based_regions(input_frame)
+        t_region = (time.time() - t0) * 1000
 
-        # Update envelope offsets for GPU renderer (env1-3 control tracks 1-3 hue angles)
-        if self.using_gpu and hasattr(self.renderer, 'set_envelope_offsets'):
-            self.renderer.set_envelope_offsets(
-                self.cv_values[0],  # env1 for channel 1
-                self.cv_values[1],  # env2 for channel 2
-                self.cv_values[2]   # env3 for channel 3
-            )
+        # Update envelope offsets for GPU renderer (DISABLED - no internal CV modulation)
+        # if self.using_gpu and hasattr(self.renderer, 'set_envelope_offsets'):
+        #     self.renderer.set_envelope_offsets(
+        #         self.cv_values[0],  # env1 for channel 1
+        #         self.cv_values[1],  # env2 for channel 2
+        #         self.cv_values[2]   # env3 for channel 3
+        #     )
 
         # Render using Multiverse engine (4 audio channels)
         # Both Numba and Qt OpenGL renderers support region_map parameter
+        t0 = time.time()
         if region_map is not None:
             rendered_rgb = self.renderer.render(channels_data, region_map=region_map)
         else:
             rendered_rgb = self.renderer.render(channels_data)
+        self.t_render = (time.time() - t0) * 1000  # ms
+        t_render_call = self.t_render
 
         # Convert RGB to BGR for OpenCV
+        t0 = time.time()
         rendered_bgr = cv2.cvtColor(rendered_rgb, cv2.COLOR_RGB2BGR)
+        t_rgb2bgr = (time.time() - t0) * 1000
 
         # Blend 5th layer (SD or camera) with Multiverse rendering if camera_mix > 0
         # input_frame is either SD output or original camera frame
+        t0 = time.time()
         camera_mix = self.renderer_params['camera_mix']
         if camera_mix > 0.0:
             # Resize input_frame to match renderer output if needed
@@ -565,11 +649,15 @@ class VAVController:
 
             # Convert back to uint8
             rendered_bgr = (result * 255.0).astype(np.uint8)
+        t_blend = (time.time() - t0) * 1000
 
         # Draw CV overlays (contour line, scan position, progress bar) - must be on top
+        t0 = time.time()
         rendered_bgr = self.contour_cv_generator.draw_overlay(rendered_bgr, self.cv_values)
+        t_overlay = (time.time() - t0) * 1000
 
         # Add info text
+        t0 = time.time()
         height, width = rendered_bgr.shape[:2]
         mode_names = ["Add", "Screen", "Diff", "Dodge"]
         mode_name = mode_names[self.renderer_params['blend_mode']]
@@ -582,6 +670,17 @@ class VAVController:
         else:
             renderer_type = "CPU"
         # Text overlay removed for clean output
+        t_text = (time.time() - t0) * 1000
+
+        # Debug log (every 100 frames)
+        if not hasattr(self, '_render_multiverse_counter'):
+            self._render_multiverse_counter = 0
+        self._render_multiverse_counter += 1
+        if self._render_multiverse_counter % 100 == 0:
+            total = t_sd_proc + t_contour_dup + t_prepare_ch + t_region + t_render_call + t_rgb2bgr + t_blend + t_overlay + t_text
+            print(f"[PERF] _render_multiverse breakdown: total={total:.2f}ms")
+            print(f"  SD={t_sd_proc:.2f}ms, contour_dup={t_contour_dup:.2f}ms, prepare_ch={t_prepare_ch:.2f}ms, region={t_region:.2f}ms")
+            print(f"  render_call={t_render_call:.2f}ms, rgb2bgr={t_rgb2bgr:.2f}ms, blend={t_blend:.2f}ms, overlay={t_overlay:.2f}ms, text={t_text:.2f}ms")
 
         return rendered_bgr
 
@@ -789,6 +888,12 @@ class VAVController:
         if 0 <= channel < 4:
             intensity = np.clip(intensity, 0.0, 1.5)
             self.renderer_params['channel_intensities'][channel] = intensity
+
+    def set_renderer_channel_ratio(self, channel: int, ratio: float):
+        """Set ratio for a specific channel (0.25-10.0, stripe density)"""
+        if 0 <= channel < 4:
+            ratio = np.clip(ratio, 0.25, 10.0)
+            self.renderer_params['channel_ratios'][channel] = ratio
 
     def set_renderer_camera_mix(self, camera_mix: float):
         """Set camera mix amount (0.0=pure multiverse, 1.0=pure camera)"""

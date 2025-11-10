@@ -53,6 +53,7 @@ class QtMultiverseRenderer(QOpenGLWidget):
     uniform vec4 intensities;
     uniform vec4 curves;
     uniform vec4 angles;
+    uniform vec4 ratios;
     uniform vec4 enabled_mask;
     uniform int blend_mode;
     uniform float brightness;
@@ -175,19 +176,24 @@ class QtMultiverseRenderer(QOpenGLWidget):
                 centered = rotate(centered, angle);
                 uv = centered + 0.5;
 
-                // Skip only if truly out of bounds after scaling
-                if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) continue;
+                // Don't skip - let texture wrapping handle out-of-bounds
+                // (Needed for ratio > 1 to work correctly with rotation)
             }
+
+            // Apply ratio (stripe density control)
+            float ratio = ratios[ch];
+            float x_sample = uv.x * ratio;
 
             // Apply curve (Y-based X-sampling offset)
-            float x_sample = uv.x;
             if (curve > 0.001) {
                 float y_from_center = (uv.y - 0.5) * 2.0;
+                // Use unscaled uv.x for bend shape to keep curve stable
                 float bend_shape = sin(uv.x * PI);
                 float bend_amount = y_from_center * bend_shape * curve * 2.0;
-                x_sample = fract(x_sample + bend_amount);
+                x_sample = x_sample + bend_amount;
             }
 
+            // Texture wraps automatically (GL_REPEAT)
             float waveValue = texture(audio_tex, vec2(x_sample, float(ch) / 4.0)).r;
             // Match Multiverse.cpp AND Numba renderer: (voltage + 10.0) * 0.05 * intensity
             // waveValue is in ±10V range, normalize to 0-1
@@ -262,6 +268,7 @@ class QtMultiverseRenderer(QOpenGLWidget):
         self.intensities = np.array([1.0, 1.0, 1.0, 1.0], dtype=np.float32)
         self.curves = np.array([0.0, 0.0, 0.0, 0.0], dtype=np.float32)
         self.angles = np.array([0.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        self.ratios = np.array([1.0, 1.0, 1.0, 1.0], dtype=np.float32)
         self.enabled_mask = np.array([0.0, 0.0, 0.0, 0.0], dtype=np.float32)
 
         # Region map data
@@ -360,8 +367,8 @@ class QtMultiverseRenderer(QOpenGLWidget):
         glBindTexture(GL_TEXTURE_2D, self.audio_tex)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT)  # Changed for ratio support
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT)  # Changed for ratio support
         glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, self.render_width, 4, 0,
                      GL_RED, GL_FLOAT, None)
 
@@ -444,6 +451,14 @@ class QtMultiverseRenderer(QOpenGLWidget):
         # Row 0 = Channel 0, Row 1 = Channel 1, etc. - NO transpose needed!
         glActiveTexture(GL_TEXTURE0)
         glBindTexture(GL_TEXTURE_2D, self.audio_tex)
+
+        # DEBUG: 每 500 幀檢查一次 audio_data (降低頻率以提升效能)
+        if not hasattr(self, '_audio_debug_counter'):
+            self._audio_debug_counter = 0
+        self._audio_debug_counter += 1
+        if self._audio_debug_counter == 500:
+            print(f"[Qt OpenGL DEBUG] audio_data shape: {self.audio_data.shape}, Ch0 range: [{self.audio_data[0].min():.2f}, {self.audio_data[0].max():.2f}]")
+
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, self.render_width, 4,
                        GL_RED, GL_FLOAT, self.audio_data)
 
@@ -465,6 +480,8 @@ class QtMultiverseRenderer(QOpenGLWidget):
                     1, self.curves)
         glUniform4fv(glGetUniformLocation(self.shader_program, b"angles"),
                     1, self.angles)
+        glUniform4fv(glGetUniformLocation(self.shader_program, b"ratios"),
+                    1, self.ratios)
         glUniform4fv(glGetUniformLocation(self.shader_program, b"enabled_mask"),
                     1, self.enabled_mask)
         glUniform1i(glGetUniformLocation(self.shader_program, b"blend_mode"),
@@ -477,6 +494,11 @@ class QtMultiverseRenderer(QOpenGLWidget):
                    self.base_hue)
         glUniform3f(glGetUniformLocation(self.shader_program, b"envelope_offsets"),
                    self.envelope_offsets[0], self.envelope_offsets[1], self.envelope_offsets[2])
+
+        # DEBUG: 每 500 幀輸出 uniform 值
+        if self._audio_debug_counter == 500:
+            print(f"[Qt OpenGL DEBUG] intensities: {self.intensities}, brightness: {self.brightness}")
+            self._audio_debug_counter = 0  # Reset counter
 
         # Bind textures and draw
         glActiveTexture(GL_TEXTURE0)
@@ -529,6 +551,7 @@ class QtMultiverseRenderer(QOpenGLWidget):
         self.enabled_mask.fill(0.0)
         self.curves.fill(0.0)
         self.angles.fill(0.0)
+        self.ratios.fill(1.0)
 
         # Handle region map
         if region_map is not None and region_map.shape == (self.render_height, self.render_width):
@@ -567,17 +590,19 @@ class QtMultiverseRenderer(QOpenGLWidget):
             if len(audio) == 0:
                 continue
 
-            # Resample to width
+            # Resample to width and scale to ±10V range (shader expects ±10V)
+            # Use 25x scaling to make audio waveforms more visible
             if len(audio) != self.render_width:
                 indices = np.linspace(0, len(audio) - 1, self.render_width).astype(int)
-                self.audio_data[i] = audio[indices]
+                self.audio_data[i] = audio[indices] * 25.0  # Scale ±1.0 to ±25.0 (clamped in shader)
             else:
-                self.audio_data[i] = audio
+                self.audio_data[i] = audio * 25.0  # Scale ±1.0 to ±25.0 (clamped in shader)
 
             self.frequencies[i] = ch_data.get('frequency', 440.0)
             self.intensities[i] = ch_data.get('intensity', 1.0)
             self.curves[i] = ch_data.get('curve', 0.0)
             self.angles[i] = ch_data.get('angle', 0.0)
+            self.ratios[i] = ch_data.get('ratio', 1.0)
             self.enabled_mask[i] = 1.0
 
         # Trigger paintGL (OpenGL calls in GUI thread)
@@ -596,6 +621,7 @@ class QtMultiverseRenderer(QOpenGLWidget):
     def _render_via_signal(self, channels_data: List[dict], region_map: np.ndarray = None) -> np.ndarray:
         """
         Render via signal/slot to GUI thread (cross-thread safe)
+        NON-BLOCKING: Returns previous frame immediately without waiting
         """
         # Store channels data for GUI thread to process
         with QMutexLocker(self.channels_data_mutex):
@@ -608,24 +634,19 @@ class QtMultiverseRenderer(QOpenGLWidget):
                     'intensity': ch.get('intensity', 1.0),
                     'curve': ch.get('curve', 0.0),
                     'angle': ch.get('angle', 0.0),
+                    'ratio': ch.get('ratio', 1.0),
                 }
                 for ch in channels_data
             ]
             # Store region map (deep copy if present)
             self.pending_region_map = region_map.copy() if region_map is not None else None
 
-        # Reset completion event
-        self.render_complete_event.clear()
-
         # Emit signal to GUI thread (queued connection)
+        # 不等待完成 讓 GUI thread 在背景處理
         self.render_requested.emit()
 
-        # Wait for rendering to complete (with timeout to avoid deadlock)
-        if not self.render_complete_event.wait(timeout=1.0):
-            print("Warning: Qt OpenGL render timeout (1s)")
-            return np.zeros((self.render_height, self.render_width, 3), dtype=np.uint8)
-
-        # Return rendered image
+        # 立即返回上一幀的渲染結果 (non-blocking)
+        # 這樣 vision thread 可以持續運行不被阻塞
         with QMutexLocker(self.rendered_image_mutex):
             if self.rendered_image is not None:
                 return self.rendered_image.copy()
@@ -636,7 +657,11 @@ class QtMultiverseRenderer(QOpenGLWidget):
         """
         Slot called in GUI thread to perform actual rendering
         """
+        import time
+        t_start = time.perf_counter()
+
         # Get pending channels data and region map
+        t0 = time.perf_counter()
         with QMutexLocker(self.channels_data_mutex):
             if self.pending_channels_data is None:
                 self.render_complete_event.set()
@@ -645,16 +670,31 @@ class QtMultiverseRenderer(QOpenGLWidget):
             region_map = self.pending_region_map
             self.pending_channels_data = None
             self.pending_region_map = None
+        t_mutex = (time.perf_counter() - t0) * 1000
 
         # Perform rendering (we're now in GUI thread)
+        t1 = time.perf_counter()
         result = self._render_direct(channels_data, region_map)
+        t_render = (time.perf_counter() - t1) * 1000
 
         # Store result with mutex
+        t2 = time.perf_counter()
         with QMutexLocker(self.rendered_image_mutex):
             self.rendered_image = result
+        t_store = (time.perf_counter() - t2) * 1000
 
         # Signal completion
         self.render_complete_event.set()
+
+        t_total = (time.perf_counter() - t_start) * 1000
+
+        # Performance logging every 100 frames
+        if not hasattr(self, '_perf_frame_count'):
+            self._perf_frame_count = 0
+        self._perf_frame_count += 1
+
+        if self._perf_frame_count % 100 == 0:
+            print(f"[PERF] GUI thread render: total={t_total:.2f}ms (mutex={t_mutex:.2f}ms, render={t_render:.2f}ms, store={t_store:.2f}ms)")
 
     def set_blend_mode(self, mode: int):
         """Set blend mode (0-3)"""
