@@ -85,16 +85,17 @@ class VAVController:
         self.audio_frequencies = np.array([440.0, 440.0, 440.0, 440.0], dtype=np.float32)
         # No pitch shifting (fixed ratio=1.0, original Multiverse default)
 
-        # CV generators (3 decay envelopes)
+        # CV generators (4 decay envelopes: ENV1-4)
         self.envelopes: List[DecayEnvelope] = []
-        self.cv_values = np.zeros(5, dtype=np.float32)  # 5 CV outputs
+        self.cv_values = np.zeros(6, dtype=np.float32)  # 6 CV outputs: ENV1-4, SEQ1-2
 
         # Envelope decay times (shadow copy for visual trigger rings)
         cv_config = self.config.get("cv", {})
         self.env_decay_times = [
             cv_config.get("decay_0_time", 1.0),
             cv_config.get("decay_1_time", 1.0),
-            cv_config.get("decay_2_time", 1.0)
+            cv_config.get("decay_2_time", 1.0),
+            cv_config.get("decay_3_time", 1.0)
         ]
 
         # Sequential switch tracking for seq1/seq2
@@ -217,11 +218,12 @@ class VAVController:
         audio_config = self.config.get("audio", {})
 
         # 僅保留 AudioIO 用於裝置選擇（GUI 需要）
+        # Output channels: 2 (audio L/R) + 6 (ENV1-4, SEQ1-2) = 8
         self.audio_io = AudioIO(
             sample_rate=self.sample_rate,
             buffer_size=self.buffer_size,
             input_channels=audio_config.get("input_channels", 4),
-            output_channels=audio_config.get("output_channels", 7),
+            output_channels=audio_config.get("output_channels", 8),
         )
 
         # Set devices if specified
@@ -687,10 +689,11 @@ class VAVController:
     def _update_cv_values(self):
         """Update CV values - 發送 SEQ 到 audio process，接收 CV 值用於 GUI"""
         if self.contour_cv_generator and self.audio_process:
-            # 發送 SEQ1/SEQ2 到獨立的 audio process (normalized 0-1)
+            # 發送 SEQ1/SEQ2/輪廓長度到獨立的 audio process (normalized 0-1)
             seq1_normalized = self.contour_cv_generator.seq1_value / 10.0
             seq2_normalized = self.contour_cv_generator.seq2_value / 10.0
-            self.audio_process.send_cv_values(seq1_normalized, seq2_normalized)
+            contour_length_normalized = self.contour_cv_generator.get_contour_length()
+            self.audio_process.send_cv_values(seq1_normalized, seq2_normalized, contour_length_normalized)
 
             # 從 audio process 接收 CV 值用於 GUI 顯示
             cv_from_audio = self.audio_process.get_cv_values()
@@ -741,7 +744,7 @@ class VAVController:
     def set_envelope_decay(self, env_idx: int, decay_time: float):
         """設定特定 envelope 的 decay time"""
         # Update shadow copy for visual trigger rings
-        if 0 <= env_idx < 3:
+        if 0 <= env_idx < 4:
             self.env_decay_times[env_idx] = decay_time
 
         # Send to audio process
@@ -751,11 +754,11 @@ class VAVController:
     def set_global_env_decay(self, decay_time: float):
         """設定所有 envelope 的 decay time"""
         # Update shadow copy for visual trigger rings
-        self.env_decay_times = [decay_time, decay_time, decay_time]
+        self.env_decay_times = [decay_time, decay_time, decay_time, decay_time]
 
         # Send to audio process
         if self.audio_process:
-            for i in range(3):
+            for i in range(4):
                 self.audio_process.set_envelope_decay(i, decay_time)
 
     def get_cv_values(self) -> np.ndarray:

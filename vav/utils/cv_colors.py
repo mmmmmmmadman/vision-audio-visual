@@ -4,13 +4,14 @@ Ensures consistent colors across main visual, CV meters, and GUI displays.
 """
 
 # BGR format for OpenCV (used in ContourCV main visual)
-# Scheme A+: Classic Torii Colors (SEQ Enhanced) - Japanese Shrine Red & White
+# Updated: ENV4 added, SEQ colors changed to white
 CV_COLORS_BGR = {
     'ENV1': (100, 120, 227),  # Light Vermillion (淡朱) - softer paired with SEQ1
     'ENV2': (220, 220, 220),  # Silver White (銀白) - softer paired with SEQ2
     'ENV3': (30, 0, 180),     # Deep Crimson (深紅) - stable deep red
-    'SEQ1': (0, 69, 255),     # Flame Vermillion (炎朱) - MOST VIVID orange-red
-    'SEQ2': (255, 255, 255),  # Snow White (雪白) - PURE white, highest contrast
+    'ENV4': (0, 69, 255),     # Orange Red (橘紅) - RGB(255, 69, 0) for scene change detection
+    'SEQ1': (255, 255, 255),  # White - average (X+Y)/2
+    'SEQ2': (255, 255, 255),  # White - difference |X-Y|
 }
 
 # RGB format for PyQt/pyqtgraph (used in CV meters and GUI)
@@ -18,8 +19,9 @@ CV_COLORS_RGB = {
     'ENV1': (227, 120, 100),  # Light Vermillion (淡朱) - softer paired with SEQ1
     'ENV2': (220, 220, 220),  # Silver White (銀白) - softer paired with SEQ2
     'ENV3': (180, 0, 30),     # Deep Crimson (深紅) - stable deep red
-    'SEQ1': (255, 69, 0),     # Flame Vermillion (炎朱) - MOST VIVID orange-red
-    'SEQ2': (255, 255, 255),  # Snow White (雪白) - PURE white, highest contrast
+    'ENV4': (255, 69, 0),     # Orange Red (橘紅) - scene change detection
+    'SEQ1': (255, 255, 255),  # White - average (X+Y)/2
+    'SEQ2': (255, 255, 255),  # White - difference |X-Y|
 }
 
 # Helper function to convert BGR to RGB
@@ -33,7 +35,7 @@ def get_cv_color(channel_name, format='BGR'):
     Get color for a CV channel
 
     Args:
-        channel_name: Name of the channel ('ENV1', 'ENV2', 'ENV3', 'SEQ1', 'SEQ2')
+        channel_name: Name of the channel ('ENV1', 'ENV2', 'ENV3', 'ENV4', 'SEQ1', 'SEQ2')
         format: 'BGR' for OpenCV, 'RGB' for Qt/pyqtgraph
 
     Returns:
@@ -44,11 +46,12 @@ def get_cv_color(channel_name, format='BGR'):
     else:
         return CV_COLORS_RGB.get(channel_name, (255, 255, 255))
 
-# List format for scope widget (ENV1, ENV2, ENV3, SEQ1, SEQ2)
+# List format for scope widget (ENV1, ENV2, ENV3, ENV4, SEQ1, SEQ2)
 SCOPE_COLORS = [
     CV_COLORS_RGB['ENV1'],
     CV_COLORS_RGB['ENV2'],
     CV_COLORS_RGB['ENV3'],
+    CV_COLORS_RGB['ENV4'],
     CV_COLORS_RGB['SEQ1'],
     CV_COLORS_RGB['SEQ2'],
 ]

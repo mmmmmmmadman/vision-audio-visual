@@ -14,7 +14,7 @@ class CVMeterWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("CV Meters")
-        self.resize(500, 180)
+        self.resize(600, 210)  # 調整大小以容納 6 個 channels
 
         # 中央 widget
         central = QWidget()
@@ -22,8 +22,8 @@ class CVMeterWindow(QMainWindow):
         layout = QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        # Meter widget
-        self.meter_widget = MeterWidget(num_channels=5)
+        # Meter widget (6 channels: ENV1-4, SEQ1-2)
+        self.meter_widget = MeterWidget(num_channels=6)
         layout.addWidget(self.meter_widget)
 
     def update_values(self, samples: np.ndarray):

@@ -44,6 +44,7 @@ class ContourScanner:
         self.env1_value = 0.0  # ENV1觸發式 0-10V
         self.env2_value = 0.0  # ENV2觸發式 0-10V
         self.env3_value = 0.0  # ENV3觸發式 0-10V
+        self.env4_value = 0.0  # ENV4觸發式 0-10V
 
         # Envelope觸發狀態追蹤
         self.prev_x_greater = False  # 上一幀 X > Y 的狀態
@@ -72,6 +73,11 @@ class ContourScanner:
 
         # 快取上次找到的所有輪廓，用於快速重新過濾
         self.cached_contours = []
+
+        # 輪廓長度 (用於 ENV4 觸發)
+        self.contour_length = 0.0
+        self.prev_contour_length_for_trigger = 0.0
+        self.contour_length_change_threshold = 0.1  # 10% 變化觸發
 
 
     def detect_and_extract_contour(self, gray: np.ndarray):
@@ -205,6 +211,9 @@ class ContourScanner:
 
         self.contour_points = best_filtered_contour
 
+        # 計算輪廓長度 (用於 ENV4 觸發)
+        self.contour_length = float(len(self.contour_points))
+
         return edges
 
     def update_scan(self, dt: float, width: int, height: int, envelopes: list = None,
@@ -243,13 +252,17 @@ class ContourScanner:
         self.current_scan_pos = (scan_x, scan_y)
 
         # 計算 SEQ1/SEQ2 輸出0-10V
-        seq1_normalized = scan_x / width
-        seq2_normalized = scan_y / height
+        # SEQ1: (X + Y) / 2 (平均值)
+        # SEQ2: |X - Y| (差值絕對值)
+        x_normalized = scan_x / width
+        y_normalized = scan_y / height
+        seq1_normalized = (x_normalized + y_normalized) / 2.0  # 平均值
+        seq2_normalized = abs(x_normalized - y_normalized)     # 差值絕對值
         self.seq1_value = seq1_normalized * 10.0
         self.seq2_value = seq2_normalized * 10.0
 
-        # ENV1觸發檢測: X > Y邊緣觸發
-        x_greater = seq1_normalized > seq2_normalized
+        # ENV1觸發檢測: X > Y邊緣觸發 (使用原始 x, y 座標)
+        x_greater = x_normalized > y_normalized
         if x_greater and not self.prev_x_greater:
             # 從X≤Y變成X>Y 觸發ENV1
             # 創建視覺觸發光圈（不需要 envelope 物件）
@@ -267,8 +280,8 @@ class ContourScanner:
                 envelopes[0].trigger()
         self.prev_x_greater = x_greater
 
-        # ENV2觸發檢測: Y > X邊緣觸發
-        y_greater = seq2_normalized > seq1_normalized
+        # ENV2觸發檢測: Y > X邊緣觸發 (使用原始 x, y 座標)
+        y_greater = y_normalized > x_normalized
         if y_greater and not self.prev_y_greater:
             # 從Y≤X變成Y>X 觸發ENV2
             # 創建視覺觸發光圈（不需要 envelope 物件）
@@ -286,11 +299,10 @@ class ContourScanner:
                 envelopes[1].trigger()
         self.prev_y_greater = y_greater
 
-        # ENV3觸發檢測: 高曲率轉彎
-        curvature = self._calculate_curvature(self.current_scan_index)
-        high_curvature = curvature > self.curvature_threshold
-        if high_curvature and not self.prev_high_curvature:
-            # 從低曲率變成高曲率 觸發ENV3
+        # ENV3觸發檢測: 當 X 或 Y 任一超過 0.5 時觸發
+        threshold_trigger = x_normalized > 0.5 or y_normalized > 0.5
+        if threshold_trigger and not self.prev_high_curvature:
+            # 從低於閾值變成超過閾值 觸發ENV3
             # 創建視覺觸發光圈（不需要 envelope 物件）
             self.trigger_rings.append({
                 'pos': (scan_x, scan_y),
@@ -304,7 +316,26 @@ class ContourScanner:
             # 如果有 envelope 物件也呼叫 trigger（相容舊架構）
             if envelopes and len(envelopes) > 2:
                 envelopes[2].trigger()
-        self.prev_high_curvature = high_curvature
+        self.prev_high_curvature = threshold_trigger
+
+        # ENV4觸發檢測: 輪廓長度變化
+        if self.prev_contour_length_for_trigger > 0:
+            length_change = abs(self.contour_length - self.prev_contour_length_for_trigger) / self.prev_contour_length_for_trigger
+            if length_change > self.contour_length_change_threshold:
+                # 輪廓長度變化超過閾值，觸發 ENV4
+                self.trigger_rings.append({
+                    'pos': (scan_x, scan_y),
+                    'radius': 15,
+                    'alpha': 1.0,
+                    'color': CV_COLORS_BGR['ENV4'],
+                    'decay_time': env_decay_times[3] if len(env_decay_times) > 3 else 1.0
+                })
+                self.last_trigger_positions['env4'] = (scan_x, scan_y, CV_COLORS_BGR['ENV4'])
+
+                # 如果有 envelope 物件也呼叫 trigger
+                if envelopes and len(envelopes) > 3:
+                    envelopes[3].trigger()
+        self.prev_contour_length_for_trigger = max(self.contour_length, 1.0)
 
         # 更新envelope輸出值 0-10V
         if envelopes:
@@ -314,6 +345,8 @@ class ContourScanner:
                 self.env2_value = envelopes[1].value * 10.0
             if len(envelopes) > 2:
                 self.env3_value = envelopes[2].value * 10.0
+            if len(envelopes) > 3:
+                self.env4_value = envelopes[3].value * 10.0
 
     def _calculate_curvature(self, index: int) -> float:
         """計算當前點的輪廓曲率
@@ -660,3 +693,11 @@ class ContourScanner:
     def set_roi_vignette(self, brightness: float):
         """設定 ROI 外圍亮度（0.0-1.0）"""
         self.roi_vignette_brightness = np.clip(brightness, 0.0, 1.0)
+
+    def get_contour_length(self) -> float:
+        """取得當前輪廓長度（正規化為 0-1）"""
+        # 假設最大輪廓長度為畫面寬+高的 2 倍（對角線來回）
+        max_length = (self.detection_width + self.detection_height) * 2.0
+        if max_length > 0:
+            return min(self.contour_length / max_length, 1.0)
+        return 0.0

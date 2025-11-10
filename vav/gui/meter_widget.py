@@ -12,16 +12,16 @@ from ..utils.cv_colors import SCOPE_COLORS
 class MeterWidget(QWidget):
     """Minimalist vertical meter for CV visualization"""
 
-    def __init__(self, num_channels: int = 5):
+    def __init__(self, num_channels: int = 6):
         """
         Initialize meter widget (horizontal layout)
 
         Args:
-            num_channels: Number of channels to display (5 = 3 ENV + 2 SEQ)
+            num_channels: Number of channels to display (6 = 4 ENV + 2 SEQ)
         """
         super().__init__()
         self.num_channels = num_channels
-        self.setMinimumHeight(80)  # 水平排列高度較小
+        self.setMinimumHeight(100)  # 增加高度以容納 6 個 channels
         self.setMinimumWidth(240)  # 最小寬度
 
         # 設置 size policy 讓 widget 可以水平擴展
@@ -35,11 +35,11 @@ class MeterWidget(QWidget):
         self.peak_hold_frames = np.zeros(num_channels, dtype=np.int32)
         self.peak_hold_duration = 10  # frames
 
-        # Colors from unified color scheme (ENV1, ENV2, ENV3, SEQ1, SEQ2)
+        # Colors from unified color scheme (ENV1-4, SEQ1-2)
         self.colors = [QColor(*rgb) for rgb in SCOPE_COLORS]
 
         # Channel labels
-        self.labels = ["ENV1", "ENV2", "ENV3", "SEQ1", "SEQ2"]
+        self.labels = ["ENV1", "ENV2", "ENV3", "ENV4", "SEQ1", "SEQ2"]
 
         # Styling
         self.setStyleSheet("background-color: #000000;")

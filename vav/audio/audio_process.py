@@ -34,8 +34,8 @@ def audio_process_worker(
     獨立 process 的 worker function
 
     Args:
-        cv_queue: 從 main process 接收 CV 值 (SEQ1, SEQ2)
-        cv_output_queue: 回傳 CV 值給 GUI (5 channels)
+        cv_queue: 從 main process 接收 CV 值 (SEQ1, SEQ2, contour_length)
+        cv_output_queue: 回傳 CV 值給 GUI (6 channels: ENV1-4, SEQ1-2)
         control_queue: 接收控制訊息 (envelope decay 等)
         config: 音訊設定
         stop_event: 停止信號
@@ -91,22 +91,23 @@ def audio_process_worker(
     dummy_audio = np.zeros((256, 2), dtype=np.float32)
     _ = ellen_ripley.process(dummy_audio[:, 0], dummy_audio[:, 1])
 
-    # CV generators (3 envelopes)
+    # CV generators (4 envelopes: ENV1-4)
     envelopes = []
     cv_config = config.get("cv", {})
-    for i in range(3):
+    for i in range(4):
         env = DecayEnvelope(
             sample_rate=sample_rate,
             decay_time=cv_config.get(f"decay_{i}_time", 1.0),
         )
         envelopes.append(env)
 
-    # CV values (5 channels: ENV1-3, SEQ1-2)
-    cv_values = np.zeros(5, dtype=np.float32)
+    # CV values (6 channels: ENV1-4, SEQ1-2)
+    cv_values = np.zeros(6, dtype=np.float32)
 
     # SEQ1/SEQ2 從 queue 接收
     seq1_value = 0.0
     seq2_value = 0.0
+    contour_length = 0.0  # 輪廓長度
 
     # Previous SEQ values for edge detection
     prev_seq1 = 0.0
@@ -114,12 +115,16 @@ def audio_process_worker(
     prev_x_greater = False
     prev_y_greater = False
 
+    # ENV4: 輪廓長度變化追蹤
+    prev_contour_length = 0.0
+    contour_length_change_threshold = 0.1  # 10% 變化觸發
+
     # Channel levels
     channel_levels = [1.0, 1.0, 1.0, 1.0]
 
     def audio_callback(indata: np.ndarray, frames: int) -> np.ndarray:
         """Audio callback - 在獨立 process 中執行"""
-        nonlocal cv_values, seq1_value, seq2_value, prev_x_greater, prev_y_greater
+        nonlocal cv_values, seq1_value, seq2_value, contour_length, prev_x_greater, prev_y_greater, prev_contour_length
 
         # 處理控制訊息 (non-blocking)
         try:
@@ -176,9 +181,16 @@ def audio_process_worker(
             pass
 
         # 嘗試從 queue 讀取最新的 SEQ 值 (non-blocking)
+        # 現在接收 3 個值: seq1, seq2, contour_length
         try:
             while not cv_queue.empty():
-                seq1_value, seq2_value = cv_queue.get_nowait()
+                data = cv_queue.get_nowait()
+                if len(data) == 3:
+                    seq1_value, seq2_value, contour_length = data
+                else:
+                    # 相容舊版 (只有 2 個值)
+                    seq1_value, seq2_value = data
+                    contour_length = 0.0
         except:
             pass
 
@@ -200,15 +212,23 @@ def audio_process_worker(
             if not envelopes[2].is_active:
                 envelopes[2].trigger()
 
+        # ENV4: 輪廓長度變化觸發 (場景變化偵測)
+        if prev_contour_length > 0:
+            # 計算長度變化比例
+            length_change = abs(contour_length - prev_contour_length) / prev_contour_length
+            if length_change > contour_length_change_threshold:
+                envelopes[3].trigger()
+        prev_contour_length = max(contour_length, 1.0)  # 避免除以零
+
         # Process CV generators (sample-accurate)
         for i in range(frames):
-            # Update envelopes
+            # Update envelopes (ENV1-4)
             for j, env in enumerate(envelopes):
                 cv_values[j] = env.process()
 
             # SEQ1/SEQ2 from queue (不會阻塞)
-            cv_values[3] = seq1_value
-            cv_values[4] = seq2_value
+            cv_values[4] = seq1_value
+            cv_values[5] = seq2_value
 
         # 回傳 CV 值給 GUI (non-blocking)
         try:
@@ -238,14 +258,14 @@ def audio_process_worker(
 
         # Build output array
         outdata = np.zeros((frames, audio_io.output_channels), dtype=np.float32)
-        outdata[:, 0] = processed_left
-        outdata[:, 1] = processed_right
+        outdata[:, 0] = processed_left  # Audio L
+        outdata[:, 1] = processed_right  # Audio R
 
-        # CV outputs (channels 2-6)
+        # CV outputs (channels 2-7: ENV1-4, SEQ1-2)
         # ES-8 使用 -1 到 +1 的音訊範圍對應 -10V 到 +10V
         # 所以 0-10V 需要映射到 0 到 +1
-        if audio_io.output_channels >= 7:
-            for i in range(5):
+        if audio_io.output_channels >= 8:
+            for i in range(6):
                 outdata[:, 2 + i] = cv_values[i]  # 0-1 範圍對應 0-10V
 
         # Update display buffer (circular buffer with downsampling, matching Multiverse.cpp)
@@ -353,20 +373,21 @@ class AudioProcess:
         self.running = False
         print("[AudioProcess] Stopped")
 
-    def send_cv_values(self, seq1: float, seq2: float):
+    def send_cv_values(self, seq1: float, seq2: float, contour_length: float = 0.0):
         """
-        發送 SEQ1/SEQ2 值到 audio process
+        發送 SEQ1/SEQ2 值和輪廓長度到 audio process
 
         Args:
             seq1: SEQ1 value (0-1)
             seq2: SEQ2 value (0-1)
+            contour_length: 輪廓長度 (用於 ENV4 觸發)
         """
         if not self.running:
             return
 
         try:
             # Non-blocking put，避免阻塞 vision thread
-            self.cv_queue.put_nowait((seq1, seq2))
+            self.cv_queue.put_nowait((seq1, seq2, contour_length))
         except:
             # Queue full，忽略
             pass
@@ -376,7 +397,7 @@ class AudioProcess:
         從 audio process 獲取 CV 值 (for GUI display)
 
         Returns:
-            5-element array: ENV1, ENV2, ENV3, SEQ1, SEQ2
+            6-element array: ENV1, ENV2, ENV3, ENV4, SEQ1, SEQ2
         """
         if not self.running:
             return None

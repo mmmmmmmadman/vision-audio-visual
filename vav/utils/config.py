@@ -25,6 +25,10 @@ class Config:
             "decay_min": 0.01,
             "decay_max": 10.0,
             "sequence_steps": 16,
+            "decay_0_time": 1.0,
+            "decay_1_time": 1.0,
+            "decay_2_time": 1.0,
+            "decay_3_time": 1.0,
         },
         "vision": {
             "camera_id": 0,
