@@ -56,6 +56,9 @@ class ContourScanner:
         self.trigger_rings = []
         self.last_trigger_positions = {'env1': None, 'env2': None, 'env3': None}
 
+        # ROI 外圍暗化（對比）
+        self.roi_vignette_brightness = 0.7  # 預設外圍亮度 0.7
+
         # 輪廓穩定性追蹤
         self.prev_anchor_x_pct = self.anchor_x_pct
         self.prev_anchor_y_pct = self.anchor_y_pct
@@ -204,16 +207,23 @@ class ContourScanner:
 
         return edges
 
-    def update_scan(self, dt: float, width: int, height: int, envelopes: list = None):
+    def update_scan(self, dt: float, width: int, height: int, envelopes: list = None,
+                   env_decay_times: list = None):
         """更新掃描進度並計算 CV 值
 
         Args:
             dt: 時間間隔（秒）
             width: 畫面寬度
             height: 畫面高度
+            envelopes: envelope 物件列表（可選，用於相容性）
+            env_decay_times: envelope decay 時間列表 [env1_decay, env2_decay, env3_decay]
         """
         if not self.contour_points or self.scan_time <= 0:
             return
+
+        # 預設 decay time
+        if env_decay_times is None:
+            env_decay_times = [1.0, 1.0, 1.0]
 
         # 更新掃描進度
         progress_increment = dt / self.scan_time
@@ -242,32 +252,38 @@ class ContourScanner:
         x_greater = seq1_normalized > seq2_normalized
         if x_greater and not self.prev_x_greater:
             # 從X≤Y變成X>Y 觸發ENV1
+            # 創建視覺觸發光圈（不需要 envelope 物件）
+            self.trigger_rings.append({
+                'pos': (scan_x, scan_y),
+                'radius': 15,
+                'alpha': 1.0,
+                'color': CV_COLORS_BGR['ENV1'],
+                'decay_time': env_decay_times[0] if len(env_decay_times) > 0 else 1.0
+            })
+            self.last_trigger_positions['env1'] = (scan_x, scan_y, CV_COLORS_BGR['ENV1'])
+
+            # 如果有 envelope 物件也呼叫 trigger（相容舊架構）
             if envelopes and len(envelopes) > 0:
                 envelopes[0].trigger()
-                self.trigger_rings.append({
-                    'pos': (scan_x, scan_y),
-                    'radius': 15,
-                    'alpha': 1.0,
-                    'color': CV_COLORS_BGR['ENV1'],
-                    'decay_time': envelopes[0].decay_time
-                })
-                self.last_trigger_positions['env1'] = (scan_x, scan_y, CV_COLORS_BGR['ENV1'])
         self.prev_x_greater = x_greater
 
         # ENV2觸發檢測: Y > X邊緣觸發
         y_greater = seq2_normalized > seq1_normalized
         if y_greater and not self.prev_y_greater:
             # 從Y≤X變成Y>X 觸發ENV2
+            # 創建視覺觸發光圈（不需要 envelope 物件）
+            self.trigger_rings.append({
+                'pos': (scan_x, scan_y),
+                'radius': 15,
+                'alpha': 1.0,
+                'color': CV_COLORS_BGR['ENV2'],
+                'decay_time': env_decay_times[1] if len(env_decay_times) > 1 else 1.0
+            })
+            self.last_trigger_positions['env2'] = (scan_x, scan_y, CV_COLORS_BGR['ENV2'])
+
+            # 如果有 envelope 物件也呼叫 trigger（相容舊架構）
             if envelopes and len(envelopes) > 1:
                 envelopes[1].trigger()
-                self.trigger_rings.append({
-                    'pos': (scan_x, scan_y),
-                    'radius': 15,
-                    'alpha': 1.0,
-                    'color': CV_COLORS_BGR['ENV2'],
-                    'decay_time': envelopes[1].decay_time
-                })
-                self.last_trigger_positions['env2'] = (scan_x, scan_y, CV_COLORS_BGR['ENV2'])
         self.prev_y_greater = y_greater
 
         # ENV3觸發檢測: 高曲率轉彎
@@ -275,16 +291,19 @@ class ContourScanner:
         high_curvature = curvature > self.curvature_threshold
         if high_curvature and not self.prev_high_curvature:
             # 從低曲率變成高曲率 觸發ENV3
+            # 創建視覺觸發光圈（不需要 envelope 物件）
+            self.trigger_rings.append({
+                'pos': (scan_x, scan_y),
+                'radius': 15,
+                'alpha': 1.0,
+                'color': CV_COLORS_BGR['ENV3'],
+                'decay_time': env_decay_times[2] if len(env_decay_times) > 2 else 1.0
+            })
+            self.last_trigger_positions['env3'] = (scan_x, scan_y, CV_COLORS_BGR['ENV3'])
+
+            # 如果有 envelope 物件也呼叫 trigger（相容舊架構）
             if envelopes and len(envelopes) > 2:
                 envelopes[2].trigger()
-                self.trigger_rings.append({
-                    'pos': (scan_x, scan_y),
-                    'radius': 15,
-                    'alpha': 1.0,
-                    'color': CV_COLORS_BGR['ENV3'],
-                    'decay_time': envelopes[2].decay_time
-                })
-                self.last_trigger_positions['env3'] = (scan_x, scan_y, CV_COLORS_BGR['ENV3'])
         self.prev_high_curvature = high_curvature
 
         # 更新envelope輸出值 0-10V
@@ -428,7 +447,7 @@ class ContourScanner:
                     (scan_x_scaled, scan_y_scaled + cross_size),
                     (133, 133, 255), 3)
 
-        # 繪製 ROI 圓圈（錨點範圍）
+        # 繪製 ROI 圓圈（錨點範圍）帶模糊效果和暗化外圍
         anchor_x = int(self.anchor_x_pct * frame_width / 100.0)
         anchor_y = int(self.anchor_y_pct * frame_height / 100.0)
         range_radius_x = int(self.range_pct * frame_width / 100.0 / 2.0)
@@ -436,7 +455,40 @@ class ContourScanner:
         # 使用平均半徑繪製圓形 ROI
         range_radius = int((range_radius_x + range_radius_y) / 2)
 
-        # 繪製半透明 ROI 圓圈（白色半透明 1px）
+        # 先將 ROI 外圍稍微變暗（使用遮罩）
+        mask = np.zeros((frame_height, frame_width), dtype=np.uint8)
+        cv2.circle(mask, (anchor_x, anchor_y), range_radius + 5, 255, -1)
+
+        # 反轉遮罩得到 ROI 外圍區域
+        mask_inv = cv2.bitwise_not(mask)
+
+        # 將外圍區域變暗 (使用設定的亮度值)
+        darkened = output.copy()
+        darkened = (darkened * self.roi_vignette_brightness).astype(np.uint8)
+
+        # 合併：ROI 內保持原樣，外圍變暗
+        output = np.where(mask_inv[:, :, np.newaxis] > 0, darkened, output)
+
+        # 繪製模糊 ROI 圓圈（主線清晰 周圍柔和）
+        # 先繪製柔和的外圍層
+        blur_layers = [
+            (range_radius + 4, 0.05),  # 最外層
+            (range_radius + 3, 0.08),
+            (range_radius + 2, 0.11),
+            (range_radius + 1, 0.13),
+            (range_radius - 1, 0.13),
+            (range_radius - 2, 0.11),
+            (range_radius - 3, 0.08),
+            (range_radius - 4, 0.05),  # 最內層
+        ]
+
+        for radius, alpha in blur_layers:
+            if radius > 0:
+                overlay = output.copy()
+                cv2.circle(overlay, (anchor_x, anchor_y), radius, (255, 255, 255), 1)
+                cv2.addWeighted(overlay, alpha, output, 1.0, 0, output)
+
+        # 最後繪製主線 1px 清晰線條
         overlay = output.copy()
         cv2.circle(overlay, (anchor_x, anchor_y), range_radius, (255, 255, 255), 1)
         cv2.addWeighted(overlay, 0.5, output, 0.5, 0, output)
@@ -628,3 +680,7 @@ class ContourScanner:
     def set_scan_time(self, scan_time: float):
         """設定掃描時間（秒）"""
         self.scan_time = np.clip(scan_time, 0.1, 60.0)
+
+    def set_roi_vignette(self, brightness: float):
+        """設定 ROI 外圍亮度（0.0-1.0）"""
+        self.roi_vignette_brightness = np.clip(brightness, 0.0, 1.0)

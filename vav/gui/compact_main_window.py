@@ -288,6 +288,24 @@ class CompactMainWindow(QMainWindow):
         self.range_slider = (slider, value)
         row1 += 1
 
+        # Contrast (ROI外圍暗化程度)
+        grid.addWidget(QLabel("Contrast"), row1, COL1)
+        slider = QSlider(Qt.Orientation.Horizontal)
+        slider.setFixedHeight(16)
+        slider.setFixedWidth(140)
+        self._apply_slider_style(slider, COLOR_COL1)
+        slider.setMinimum(0)
+        slider.setMaximum(100)
+        slider.setValue(30)  # 預設 0.7 (70% 亮度 = 30% 暗化)
+        slider.valueChanged.connect(self._on_contrast_changed)
+        self._make_slider_learnable(slider, "contrast", self._on_contrast_changed)
+        grid.addWidget(slider, row1, COL1 + 1)
+        value = QLabel("0.7")
+        value.setFixedWidth(35)
+        grid.addWidget(value, row1, COL1 + 2)
+        self.contrast_slider = (slider, value)
+        row1 += 1
+
         # Mixer (moved from COL2)
         self.mixer_sliders = []
         for i in range(4):
@@ -1209,6 +1227,13 @@ class CompactMainWindow(QMainWindow):
         label.setText(f"{value}%")
         # Update XY Pad to show ROI circle
         self.anchor_xy_pad.set_range(float(value))
+
+    def _on_contrast_changed(self, value: int):
+        """ROI外圍暗化程度 (0-100 對應亮度 1.0-0.0)"""
+        brightness = 1.0 - (value / 100.0)  # 0 = 亮度1.0(無暗化), 100 = 亮度0.0(全黑)
+        self.controller.set_roi_vignette(brightness)
+        _, label = self.contrast_slider
+        label.setText(f"{brightness:.2f}")
 
     def _on_threshold_changed(self, value: int):
         """Edge detection threshold (0-255)"""

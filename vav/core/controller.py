@@ -88,6 +88,14 @@ class VAVController:
         self.envelopes: List[DecayEnvelope] = []
         self.cv_values = np.zeros(5, dtype=np.float32)  # 5 CV outputs
 
+        # Envelope decay times (shadow copy for visual trigger rings)
+        cv_config = self.config.get("cv", {})
+        self.env_decay_times = [
+            cv_config.get("decay_0_time", 1.0),
+            cv_config.get("decay_1_time", 1.0),
+            cv_config.get("decay_2_time", 1.0)
+        ]
+
         # Sequential switch tracking for seq1/seq2
         self.seq1_current_channel = 0  # 0-3 for curve control
         self.seq2_current_channel = 0  # 0-3 for angle control
@@ -380,7 +388,13 @@ class VAVController:
             current_time = time.time()
             dt_since_last_update = current_time - last_cv_update
             if dt_since_last_update >= cv_update_time:
-                self.contour_cv_generator.update_scan(dt_since_last_update, frame.shape[1], frame.shape[0], self.envelopes)
+                self.contour_cv_generator.update_scan(
+                    dt_since_last_update,
+                    frame.shape[1],
+                    frame.shape[0],
+                    envelopes=None,  # 不再使用 envelope 物件
+                    env_decay_times=self.env_decay_times  # 傳入 decay times 供視覺化
+                )
                 self._update_cv_values()
                 last_cv_update = current_time
 
@@ -614,6 +628,11 @@ class VAVController:
         if self.contour_cv_generator:
             self.contour_cv_generator.set_scan_time(scan_time)
 
+    def set_roi_vignette(self, brightness: float):
+        """Set ROI vignette brightness (0.0-1.0)"""
+        if self.contour_cv_generator:
+            self.contour_cv_generator.set_roi_vignette(brightness)
+
     # Audio callback 已移至 AudioProcess (獨立 process)
     # def _update_audio_buffers(...)
     # def _audio_callback(...)
@@ -622,11 +641,20 @@ class VAVController:
     # Envelope decay 控制透過 AudioProcess 跨 process 通訊
     def set_envelope_decay(self, env_idx: int, decay_time: float):
         """設定特定 envelope 的 decay time"""
+        # Update shadow copy for visual trigger rings
+        if 0 <= env_idx < 3:
+            self.env_decay_times[env_idx] = decay_time
+
+        # Send to audio process
         if self.audio_process:
             self.audio_process.set_envelope_decay(env_idx, decay_time)
 
     def set_global_env_decay(self, decay_time: float):
         """設定所有 envelope 的 decay time"""
+        # Update shadow copy for visual trigger rings
+        self.env_decay_times = [decay_time, decay_time, decay_time]
+
+        # Send to audio process
         if self.audio_process:
             for i in range(3):
                 self.audio_process.set_envelope_decay(i, decay_time)
