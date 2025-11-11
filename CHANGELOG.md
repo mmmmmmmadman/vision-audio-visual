@@ -2,6 +2,54 @@
 
 ---
 
+## [2025-11-11] Region Map 診斷與除錯工具添加
+
+### 問題診斷
+
+**Region Map 在 Multiverse 模式下視覺效果不明顯**
+- 使用者反應開關 Region Map 時畫面沒有明顯變化
+- 經診斷確認 Region Map 功能本身正常運作
+- 問題在於四個 channels 同時啟用經過 blend 後視覺差異不明顯
+
+### 診斷工具添加
+
+**Controller 除錯訊息**
+- controller.py:602-606 添加 region rendering 狀態輸出
+- 每 100 幀輸出 use_region_rendering region_mapper region_mode using_gpu 狀態
+
+**Renderer 除錯訊息**
+- qt_opengl_renderer.py:878-879 添加 region 狀態和 texture 資料輸出
+- 顯示 use_region_map use_gpu_region Camera frame Region map 狀態
+
+**Shader 視覺化模式**
+- qt_opengl_renderer.py:179-187 添加 region 分布視覺化功能
+- 可將 if false 改為 if true 啟用四色區域顯示
+- 紅色 CH1 最暗 綠色 CH2 中暗 藍色 CH3 中亮 黃色 CH4 最亮
+
+### 診斷結果確認
+
+從 log 確認以下項目正常運作
+- Controller 正確啟用 region rendering
+- Renderer 正確接收 use_region_map=1 use_gpu_region=1
+- Camera frame 正確上傳到 GPU
+- Shader uniforms 正確傳遞
+
+### 問題根源
+
+四個 channels 全部啟用時經過 blend mode 混合後視覺差異被稀釋
+- 暗區顯示 CH1 0度
+- 亮區顯示 CH4 135度
+- blend 後顏色接近難以區分
+
+### 建議測試方法
+
+1. 只啟用 CH1 和 CH4 停用 CH2 CH3
+2. 設定極端角度差異 CH1=0度 CH4=90度
+3. 用手遮蔽鏡頭製造明暗對比
+4. 或使用 shader 視覺化模式直接看四色區域分布
+
+---
+
 ## [2025-11-11] CV Meter 訊號修復 + 效能優化後續問題修正
 
 ### 問題修復

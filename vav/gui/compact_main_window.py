@@ -260,11 +260,11 @@ class CompactMainWindow(QMainWindow):
         self._apply_slider_style(slider, COLOR_COL1)
         slider.setMinimum(2)  # 0.1s
         slider.setMaximum(600)  # 30s
-        slider.setValue(40)  # 2.0s
+        slider.setValue(200)  # 10.0s
         slider.valueChanged.connect(self._on_clock_rate_changed)
         self._make_slider_learnable(slider, "scan_time", self._on_clock_rate_changed)
         grid.addWidget(slider, row1, COL1 + 1)
-        value = QLabel("2.0s")
+        value = QLabel("10.0s")
         value.setFixedWidth(35)
         grid.addWidget(value, row1, COL1 + 2)
         self.clock_slider = (slider, value)
@@ -286,24 +286,6 @@ class CompactMainWindow(QMainWindow):
         value.setFixedWidth(35)
         grid.addWidget(value, row1, COL1 + 2)
         self.range_slider = (slider, value)
-        row1 += 1
-
-        # Contrast (ROI外圍暗化程度)
-        grid.addWidget(QLabel("Contrast"), row1, COL1)
-        slider = QSlider(Qt.Orientation.Horizontal)
-        slider.setFixedHeight(16)
-        slider.setFixedWidth(140)
-        self._apply_slider_style(slider, COLOR_COL1)
-        slider.setMinimum(0)
-        slider.setMaximum(100)
-        slider.setValue(30)  # 預設 0.7 (70% 亮度 = 30% 暗化)
-        slider.valueChanged.connect(self._on_contrast_changed)
-        self._make_slider_learnable(slider, "contrast", self._on_contrast_changed)
-        grid.addWidget(slider, row1, COL1 + 1)
-        value = QLabel("0.7")
-        value.setFixedWidth(35)
-        grid.addWidget(value, row1, COL1 + 2)
-        self.contrast_slider = (slider, value)
         row1 += 1
 
         # Mixer (moved from COL2)
@@ -541,9 +523,9 @@ class CompactMainWindow(QMainWindow):
             ratio_slider.setFixedHeight(16)
             ratio_slider.setFixedWidth(120)
             self._apply_slider_style(ratio_slider, COLOR_COL3)
-            ratio_slider.setMinimum(25)  # 0.25
+            ratio_slider.setMinimum(5)  # 0.05
             ratio_slider.setMaximum(1000)  # 10.0
-            ratio_slider.setValue(100)  # 1.0
+            ratio_slider.setValue(5)  # 0.05 default
             ratio_slider.valueChanged.connect(lambda val, idx=i: self._on_channel_ratio_changed(idx, val))
             self._make_slider_learnable(ratio_slider, f"ch{i+1}_ratio", lambda val, idx=i: self._on_channel_ratio_changed(idx, val))
             grid.addWidget(ratio_slider, row3, COL3 + 1)
@@ -1246,13 +1228,6 @@ class CompactMainWindow(QMainWindow):
         label.setText(f"{value}%")
         # Update XY Pad to show ROI circle
         self.anchor_xy_pad.set_range(float(value))
-
-    def _on_contrast_changed(self, value: int):
-        """ROI外圍暗化程度 (0-100 對應亮度 1.0-0.0)"""
-        brightness = 1.0 - (value / 100.0)  # 0 = 亮度1.0(無暗化), 100 = 亮度0.0(全黑)
-        self.controller.set_roi_vignette(brightness)
-        _, label = self.contrast_slider
-        label.setText(f"{brightness:.2f}")
 
     def _on_threshold_changed(self, value: int):
         """Edge detection threshold (0-255)"""

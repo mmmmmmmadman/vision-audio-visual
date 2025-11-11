@@ -598,6 +598,13 @@ class VAVController:
         region_map = None
         use_gpu_region = True  # Default to GPU region mode
 
+        # DEBUG: Log region rendering state every 100 frames
+        if not hasattr(self, '_region_debug_counter'):
+            self._region_debug_counter = 0
+        self._region_debug_counter += 1
+        if self._region_debug_counter % 100 == 0:
+            print(f"[Region DEBUG] use_region_rendering={self.use_region_rendering}, region_mapper={self.region_mapper is not None}, region_mode={self.region_mode}, using_gpu={self.using_gpu}")
+
         if self.use_region_rendering and self.region_mapper:
             # GPU region mode: default for brightness mode with Qt OpenGL renderer
             if self.region_mode == 'brightness' and self.using_gpu:
@@ -623,7 +630,10 @@ class VAVController:
             overlay_data = {
                 'contour_points': self.contour_cv_generator.contour_points,
                 'scan_point': self.contour_cv_generator.current_scan_pos,
-                'rings': self.contour_cv_generator.trigger_rings
+                'rings': self.contour_cv_generator.trigger_rings,
+                'roi_center': (self.contour_cv_generator.anchor_x_pct / 100.0,
+                              self.contour_cv_generator.anchor_y_pct / 100.0),
+                'roi_radius': self.contour_cv_generator.range_pct / 100.0 / 2.0
             }
 
         # Render using Multiverse engine with GPU blend (33-42ms CPU blend eliminated!)
@@ -764,11 +774,6 @@ class VAVController:
         """Set contour scan time in seconds (0.1-60s)"""
         if self.contour_cv_generator:
             self.contour_cv_generator.set_scan_time(scan_time)
-
-    def set_roi_vignette(self, brightness: float):
-        """Set ROI vignette brightness (0.0-1.0)"""
-        if self.contour_cv_generator:
-            self.contour_cv_generator.set_roi_vignette(brightness)
 
     # Audio callback 已移至 AudioProcess (獨立 process)
     # def _update_audio_buffers(...)

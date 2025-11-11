@@ -176,6 +176,16 @@ class QtMultiverseRenderer(QOpenGLWidget):
                 vec3 cameraColor = texture(camera_tex, vec2(v_texcoord.x, 1.0 - v_texcoord.y)).rgb;
                 float brightness_val = dot(cameraColor, vec3(0.299, 0.587, 0.114));  // RGB to grayscale
 
+                // DEBUG: Visualize region map by coloring pixels
+                // TEMPORARY: Uncomment to see region distribution
+                if (false) {  // Change to 'true' to enable visualization
+                    if (brightness_val < 0.25) fragColor = vec4(1.0, 0.0, 0.0, 1.0);  // Red = CH1 (darkest)
+                    else if (brightness_val < 0.5) fragColor = vec4(0.0, 1.0, 0.0, 1.0);  // Green = CH2
+                    else if (brightness_val < 0.75) fragColor = vec4(0.0, 0.0, 1.0, 1.0);  // Blue = CH3
+                    else fragColor = vec4(1.0, 1.0, 0.0, 1.0);  // Yellow = CH4 (brightest)
+                    return;
+                }
+
                 // Brightness-based region (4 levels)
                 if (brightness_val < 0.25) {
                     currentRegion = 0;  // CH1: very dark
@@ -239,9 +249,8 @@ class QtMultiverseRenderer(QOpenGLWidget):
 
             // Texture wraps automatically (GL_REPEAT)
             float waveValue = texture(audio_tex, vec2(x_sample, float(ch) / 4.0)).r;
-            // Match Multiverse.cpp AND Numba renderer: (voltage + 10.0) * 0.05 * intensity
-            // waveValue is in ±10V range, normalize to 0-1
-            float normalized = clamp((waveValue + 10.0) * 0.05 * intensities[ch], 0.0, 1.0);
+            // waveValue is in ±10V range, only use positive values (0-10V maps to 0.0-1.0)
+            float normalized = clamp(waveValue * 0.1 * intensities[ch], 0.0, 1.0);
 
             if (normalized > 0.01) {
                 vec3 rgb = getChannelColor(ch);
@@ -555,8 +564,8 @@ class QtMultiverseRenderer(QOpenGLWidget):
 
         self.overlay_vbo = glGenBuffers(1)
         glBindBuffer(GL_ARRAY_BUFFER, self.overlay_vbo)
-        # Allocate buffer for max 10000 vertices (large enough for contours)
-        glBufferData(GL_ARRAY_BUFFER, 10000 * 2 * 4, None, GL_DYNAMIC_DRAW)  # vec2 * float32
+        # Allocate buffer for max 50000 vertices (for 100% resolution contours)
+        glBufferData(GL_ARRAY_BUFFER, 50000 * 2 * 4, None, GL_DYNAMIC_DRAW)  # vec2 * float32
 
         # Position attribute (location 0)
         glEnableVertexAttribArray(0)
@@ -876,6 +885,8 @@ class QtMultiverseRenderer(QOpenGLWidget):
 
         if self._debug_frame_count % 100 == 0:
             print(f"[Qt OpenGL] Rendering frame {self._debug_frame_count} (thread: {threading.current_thread().name})")
+            print(f"[Qt OpenGL] Region state: use_region_map={self.use_region_map}, use_gpu_region={self.use_gpu_region}")
+            print(f"[Qt OpenGL] Camera frame: {self.camera_frame_data is not None}, Region map: {self.region_map_data is not None}")
             for i in range(min(4, len(channels_data))):
                 ch_data = channels_data[i]
                 audio = ch_data.get('audio', np.array([]))
@@ -1103,23 +1114,6 @@ class QtMultiverseRenderer(QOpenGLWidget):
         # Use overlay shader
         glUseProgram(self.overlay_shader_program)
 
-        # DEBUG: Verify shader program is active
-        if not hasattr(self, '_overlay_shader_verified'):
-            current_program_after_use = glGetIntegerv(GL_CURRENT_PROGRAM)
-            print(f"[GPU Overlay DEBUG] Overlay shader program: expected={self.overlay_shader_program}, actual={current_program_after_use}")
-
-            # DEBUG: Check if shader is linked correctly
-            link_status = glGetProgramiv(self.overlay_shader_program, GL_LINK_STATUS)
-            validate_status = glGetProgramiv(self.overlay_shader_program, GL_VALIDATE_STATUS)
-            print(f"[GPU Overlay DEBUG] Shader link_status={link_status}, validate_status={validate_status}")
-
-            # DEBUG: Check uniform locations
-            proj_loc_test = glGetUniformLocation(self.overlay_shader_program, b"projection")
-            color_loc_test = glGetUniformLocation(self.overlay_shader_program, b"color")
-            print(f"[GPU Overlay DEBUG] Uniform locations: projection={proj_loc_test}, color={color_loc_test}")
-
-            self._overlay_shader_verified = True
-
         # Set projection matrix uniform
         proj_loc = glGetUniformLocation(self.overlay_shader_program, b"projection")
         glUniformMatrix4fv(proj_loc, 1, GL_FALSE, self.overlay_projection_matrix.flatten())
@@ -1132,49 +1126,43 @@ class QtMultiverseRenderer(QOpenGLWidget):
 
         # NDC test removed - was interfering with normal projection matrix
 
-        # Draw contour lines (simplified - single pass due to macOS glLineWidth limitation)
+        # Draw contour lines (match CPU version: white base + black top)
+        # CPU version: white 6px + black 2px (contour_scanner.py:438-445)
+        # GPU workaround: Draw multiple offset lines to simulate thickness (macOS limitation: glLineWidth = 1.0)
         if len(self.overlay_contour_points) > 1:
             # Flip Y: screen coords (Y down) -> OpenGL coords (Y up)
             vertices = np.array([
                 [x, self.render_height - y] for x, y in self.overlay_contour_points
             ], dtype=np.float32)
 
-            # DEBUG: Log first few vertices after transformation
-            if not hasattr(self, '_overlay_vertex_logged'):
-                print(f"[GPU Overlay DEBUG] First 5 vertices after Y-flip: {vertices[:5]}")
-                print(f"[GPU Overlay DEBUG] Projection matrix:\n{self.overlay_projection_matrix}")
-                self._overlay_vertex_logged = True
-
-            # Upload vertices to VBO
-            glBindBuffer(GL_ARRAY_BUFFER, self.overlay_vbo)
-            glBufferSubData(GL_ARRAY_BUFFER, 0, vertices.nbytes, vertices)
-
-            # Bright green line for debugging (macOS Core Profile only supports glLineWidth(1.0))
             color_loc = glGetUniformLocation(self.overlay_shader_program, b"color")
+            glBindBuffer(GL_ARRAY_BUFFER, self.overlay_vbo)
 
-            # DEBUG: Verify color uniform location
-            if not hasattr(self, '_color_uniform_checked'):
-                print(f"[GPU Overlay DEBUG] Color uniform location: {color_loc}")
-                self._color_uniform_checked = True
+            # Layer 1: White base (4x thickness - simulate 24px)
+            glUniform4f(color_loc, 1.0, 1.0, 1.0, 1.0)  # White
+            offsets = [
+                (0, 0),   # Center
+                (-1, 0), (1, 0), (0, -1), (0, 1),  # Cross
+                (-2, 0), (2, 0), (0, -2), (0, 2),  # Outer cross
+                (-3, 0), (3, 0), (0, -3), (0, 3),  # Outer cross 2
+                (-4, 0), (4, 0), (0, -4), (0, 4),  # Outer cross 3
+                (-1, -1), (1, -1), (-1, 1), (1, 1),  # Diagonals
+                (-2, -2), (2, -2), (-2, 2), (2, 2),  # Diagonals 2
+            ]
+            for dx, dy in offsets:
+                offset_vertices = vertices + np.array([dx, dy], dtype=np.float32)
+                glBufferSubData(GL_ARRAY_BUFFER, 0, offset_vertices.nbytes, offset_vertices)
+                glDrawArrays(GL_LINE_STRIP, 0, len(offset_vertices))
 
-            glUniform4f(color_loc, 0.0, 1.0, 0.0, 1.0)  # Bright green instead of white
+            # Layer 2: Black top (4x thickness - simulate 8px)
+            glUniform4f(color_loc, 0.0, 0.0, 0.0, 1.0)  # Black
+            for dx, dy in [(0, 0), (-1, 0), (1, 0), (0, -1), (0, 1), (-2, 0), (2, 0), (0, -2), (0, 2), (-1, -1), (1, -1), (-1, 1), (1, 1)]:
+                offset_vertices = vertices + np.array([dx, dy], dtype=np.float32)
+                glBufferSubData(GL_ARRAY_BUFFER, 0, offset_vertices.nbytes, offset_vertices)
+                glDrawArrays(GL_LINE_STRIP, 0, len(offset_vertices))
 
-            # DEBUG: Check GL error before draw
-            err_before = glGetError()
-            if err_before != 0:
-                print(f"[GPU Overlay ERROR] GL error before draw: {err_before}")
-
-            glDrawArrays(GL_LINE_STRIP, 0, len(vertices))
-
-            # DEBUG: Check GL error after draw
-            err_after = glGetError()
-            if err_after != 0:
-                print(f"[GPU Overlay ERROR] GL error after draw: {err_after}")
-            elif not hasattr(self, '_overlay_draw_success_logged'):
-                print(f"[GPU Overlay DEBUG] Successfully drew {len(vertices)} vertices as LINE_STRIP")
-                self._overlay_draw_success_logged = True
-
-        # Draw scan point cross (simplified - single layer due to macOS limitation)
+        # Draw scan point cross (match CPU version: 3 layers)
+        # CPU version: black 10px + white 6px + pink 3px (contour_scanner.py:447-481)
         if self.overlay_scan_point is not None:
             x, y = self.overlay_scan_point
             y = self.render_height - y  # Flip Y
@@ -1191,15 +1179,48 @@ class QtMultiverseRenderer(QOpenGLWidget):
             ], dtype=np.float32)
 
             glBindBuffer(GL_ARRAY_BUFFER, self.overlay_vbo)
-            glBufferSubData(GL_ARRAY_BUFFER, 0, cross_vertices.nbytes, cross_vertices)
-
             color_loc = glGetUniformLocation(self.overlay_shader_program, b"color")
 
-            # Bright cyan cross for debugging (single layer)
-            glUniform4f(color_loc, 0.0, 1.0, 1.0, 1.0)  # Cyan instead of pink
-            glDrawArrays(GL_LINES, 0, 4)
+            # 3-layer cross (2x thickness: black 20px + white 12px + pink 6px)
+            # Layer 1: Black outer border (simulate 20px)
+            glUniform4f(color_loc, 0.0, 0.0, 0.0, 1.0)  # Black
+            black_offsets = [
+                (0, 0),
+                (-1, 0), (1, 0), (0, -1), (0, 1),
+                (-2, 0), (2, 0), (0, -2), (0, 2),
+                (-3, 0), (3, 0), (0, -3), (0, 3),
+                (-1, -1), (1, -1), (-1, 1), (1, 1),
+            ]
+            for dx, dy in black_offsets:
+                offset_vertices = cross_vertices + np.array([dx, dy], dtype=np.float32)
+                glBufferSubData(GL_ARRAY_BUFFER, 0, offset_vertices.nbytes, offset_vertices)
+                glDrawArrays(GL_LINES, 0, 4)
 
-        # Draw trigger rings (circles using line loop approximation)
+            # Layer 2: White middle (simulate 12px)
+            glUniform4f(color_loc, 1.0, 1.0, 1.0, 1.0)  # White
+            white_offsets = [
+                (0, 0),
+                (-1, 0), (1, 0), (0, -1), (0, 1),
+                (-2, 0), (2, 0), (0, -2), (0, 2),
+            ]
+            for dx, dy in white_offsets:
+                offset_vertices = cross_vertices + np.array([dx, dy], dtype=np.float32)
+                glBufferSubData(GL_ARRAY_BUFFER, 0, offset_vertices.nbytes, offset_vertices)
+                glDrawArrays(GL_LINES, 0, 4)
+
+            # Layer 3: Pink center (simulate 6px)
+            glUniform4f(color_loc, 1.0, 0.52, 0.52, 1.0)  # Pink (BGR 133,133,255)
+            pink_offsets = [
+                (0, 0),
+                (-1, 0), (1, 0), (0, -1), (0, 1),
+            ]
+            for dx, dy in pink_offsets:
+                offset_vertices = cross_vertices + np.array([dx, dy], dtype=np.float32)
+                glBufferSubData(GL_ARRAY_BUFFER, 0, offset_vertices.nbytes, offset_vertices)
+                glDrawArrays(GL_LINES, 0, 4)
+
+        # Draw trigger rings (match CPU version: 3px line with alpha blending)
+        # CPU version: cv2.circle with thickness=3 + alpha blending (contour_scanner.py:516-517)
         for ring in self.overlay_rings:
             pos_x, pos_y = ring['pos']
             pos_y = self.render_height - pos_y  # Flip Y
@@ -1210,55 +1231,33 @@ class QtMultiverseRenderer(QOpenGLWidget):
             # Convert BGR to RGB
             r, g, b = color[2] / 255.0, color[1] / 255.0, color[0] / 255.0
 
-            # Generate circle vertices
-            num_segments = 32
-            circle_vertices = []
-            for i in range(num_segments):
-                theta = 2.0 * np.pi * i / num_segments
-                cx = pos_x + radius * np.cos(theta)
-                cy = pos_y + radius * np.sin(theta)
-                circle_vertices.append([cx, cy])
-            circle_vertices = np.array(circle_vertices, dtype=np.float32)
-
-            # Upload and draw
-            glBindBuffer(GL_ARRAY_BUFFER, self.overlay_vbo)
-            glBufferSubData(GL_ARRAY_BUFFER, 0, circle_vertices.nbytes, circle_vertices)
-
             color_loc = glGetUniformLocation(self.overlay_shader_program, b"color")
+            glBindBuffer(GL_ARRAY_BUFFER, self.overlay_vbo)
             glUniform4f(color_loc, r, g, b, alpha)
-            # No glLineWidth call - macOS only supports 1.0
-            glDrawArrays(GL_LINE_LOOP, 0, num_segments)
+
+            # Generate circle vertices and draw multiple times to simulate 3px thickness
+            num_segments = 32
+            ring_offsets = [
+                0.0,      # Center
+                -1.0, 1.0, # Inner/outer offset
+            ]
+            for r_offset in ring_offsets:
+                circle_vertices = []
+                adjusted_radius = radius + r_offset
+                for i in range(num_segments):
+                    theta = 2.0 * np.pi * i / num_segments
+                    cx = pos_x + adjusted_radius * np.cos(theta)
+                    cy = pos_y + adjusted_radius * np.sin(theta)
+                    circle_vertices.append([cx, cy])
+                circle_vertices = np.array(circle_vertices, dtype=np.float32)
+
+                # Upload and draw
+                glBufferSubData(GL_ARRAY_BUFFER, 0, circle_vertices.nbytes, circle_vertices)
+                glDrawArrays(GL_LINE_LOOP, 0, num_segments)
 
         # Restore state
         glBindVertexArray(0)
         glUseProgram(0)
-
-        # DEBUG: Read a pixel from overlay area to verify it was drawn
-        # Sample a few pixels along the contour line to check if green is present
-        if len(self.overlay_contour_points) > 10 and not hasattr(self, '_overlay_pixel_check_logged'):
-            # Ensure all drawing is complete before reading pixels
-            glFinish()
-
-            # Sample 5 points along the contour
-            indices = [0, len(self.overlay_contour_points)//4, len(self.overlay_contour_points)//2,
-                      3*len(self.overlay_contour_points)//4, len(self.overlay_contour_points)-1]
-            print(f"[GPU Overlay DEBUG] Sampling {len(indices)} pixels from contour line (after glFinish)...")
-            for idx in indices:
-                cont_x, cont_y = self.overlay_contour_points[idx]
-                gl_y = self.render_height - cont_y
-                pixel = glReadPixels(int(cont_x), int(gl_y), 1, 1, GL_RGB, GL_UNSIGNED_BYTE)
-                r, g, b = pixel[0], pixel[1], pixel[2]
-                print(f"  Point {idx}: screen({int(cont_x)}, {int(cont_y)}) -> RGB=({r}, {g}, {b})")
-
-            # Also check scan point if available
-            if self.overlay_scan_point is not None:
-                scan_x, scan_y = self.overlay_scan_point
-                gl_y = self.render_height - scan_y
-                pixel = glReadPixels(scan_x, gl_y, 1, 1, GL_RGB, GL_UNSIGNED_BYTE)
-                r, g, b = pixel[0], pixel[1], pixel[2]
-                print(f"  Scan point: screen({scan_x}, {scan_y}) -> RGB=({r}, {g}, {b}) - Expected cyan (0, 255, 255)")
-
-            self._overlay_pixel_check_logged = True
 
     def cleanup(self):
         """Clean up OpenGL resources"""

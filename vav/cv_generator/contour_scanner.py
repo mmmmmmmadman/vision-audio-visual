@@ -28,10 +28,10 @@ class ContourScanner:
         # 錨點與範圍
         self.anchor_x_pct = 50
         self.anchor_y_pct = 50
-        self.range_pct = 50
+        self.range_pct = 25  # 預設 25%
 
         # 掃描參數
-        self.scan_time = 2.0  # 掃過完整輪廓的時間（秒）
+        self.scan_time = 10.0  # 掃過完整輪廓的時間（秒）預設 10 秒
         self.scan_progress = 0.0  # 當前掃描進度 (0-1)
 
         # 輪廓數據
@@ -56,9 +56,6 @@ class ContourScanner:
         self.current_scan_pos = None  # 當前掃描位置 (x, y)
         self.trigger_rings = []
         self.last_trigger_positions = {'env1': None, 'env2': None, 'env3': None}
-
-        # ROI 外圍暗化（對比）
-        self.roi_vignette_brightness = 0.7  # 預設外圍亮度 0.7
 
         # 輪廓穩定性追蹤
         self.prev_anchor_x_pct = self.anchor_x_pct
@@ -488,20 +485,6 @@ class ContourScanner:
         range_radius_y = int(self.range_pct * frame_height / 100.0 / 2.0)
         range_radius = int((range_radius_x + range_radius_y) / 2)
 
-        # ROI 圓圈繪製已停用（節省約 30-40ms）
-        # # 先將 ROI 外圍稍微變暗（使用遮罩）
-        # mask = np.zeros((frame_height, frame_width), dtype=np.uint8)
-        # cv2.circle(mask, (anchor_x, anchor_y), range_radius + 5, 255, -1)
-        # mask_inv = cv2.bitwise_not(mask)
-        # darkened = output.copy()
-        # darkened = (darkened * self.roi_vignette_brightness).astype(np.uint8)
-        # output = np.where(mask_inv[:, :, np.newaxis] > 0, darkened, output)
-        #
-        # # 繪製模糊 ROI 圓圈
-        # blur_layers = [...]
-        # for radius, alpha in blur_layers:
-        #     ...
-
         # 繪製觸發光圈
         for ring in self.trigger_rings:
             pos_x, pos_y = ring['pos']
@@ -689,10 +672,6 @@ class ContourScanner:
     def set_scan_time(self, scan_time: float):
         """設定掃描時間（秒）"""
         self.scan_time = np.clip(scan_time, 0.1, 60.0)
-
-    def set_roi_vignette(self, brightness: float):
-        """設定 ROI 外圍亮度（0.0-1.0）"""
-        self.roi_vignette_brightness = np.clip(brightness, 0.0, 1.0)
 
     def get_contour_length(self) -> float:
         """取得當前輪廓長度（正規化為 0-1）"""
