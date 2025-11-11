@@ -95,6 +95,12 @@ class ContourScanner:
         """
         height, width = gray.shape
 
+        # 降低偵測解析度至 25%
+        detection_scale = 0.25
+        detect_width = int(width * detection_scale)
+        detect_height = int(height * detection_scale)
+        gray_small = cv2.resize(gray, (detect_width, detect_height))
+
         # 檢查是否需要更新輪廓
         anchor_moved = (abs(self.anchor_x_pct - self.prev_anchor_x_pct) > 0.0001 or
                        abs(self.anchor_y_pct - self.prev_anchor_y_pct) > 0.0001)
@@ -102,7 +108,7 @@ class ContourScanner:
 
         scene_changed = False
         if self.prev_gray is not None:
-            diff = cv2.absdiff(gray, self.prev_gray)
+            diff = cv2.absdiff(gray_small, self.prev_gray)
             mean_diff = np.mean(diff)
             diff_percentage = (mean_diff / 255.0) * 100.0
             scene_changed = diff_percentage > self.scene_change_threshold
@@ -114,19 +120,17 @@ class ContourScanner:
         self.prev_anchor_x_pct = self.anchor_x_pct
         self.prev_anchor_y_pct = self.anchor_y_pct
         self.prev_range_pct = self.range_pct
-        self.prev_gray = gray.copy()
+        self.prev_gray = gray_small.copy()
 
-        # 儲存檢測時的畫面尺寸
+        # 儲存原始畫面尺寸
         self.detection_width = width
         self.detection_height = height
 
-        # 計算錨點位置和ROI範圍
-        anchor_x = int(self.anchor_x_pct * width / 100.0)
-        anchor_y = int(self.anchor_y_pct * height / 100.0)
-        # range_pct 是 ROI 直徑的百分比，所以半徑要除以2
-        # 例如：range_pct=100 表示直徑為畫面寬度，半徑為畫面寬度的一半
-        range_x = int(self.range_pct * width / 100.0 / 2.0)
-        range_y = int(self.range_pct * height / 100.0 / 2.0)
+        # 計算錨點位置和ROI範圍 使用縮小後的座標
+        anchor_x = int(self.anchor_x_pct * detect_width / 100.0)
+        anchor_y = int(self.anchor_y_pct * detect_height / 100.0)
+        range_x = int(self.range_pct * detect_width / 100.0 / 2.0)
+        range_y = int(self.range_pct * detect_height / 100.0 / 2.0)
 
         # DEBUG: Monitor sync status
         if anchor_moved or range_changed:
@@ -135,31 +139,30 @@ class ContourScanner:
         # 計算ROI邊界
         roi_x1 = max(0, anchor_x - range_x)
         roi_y1 = max(0, anchor_y - range_y)
-        roi_x2 = min(width, anchor_x + range_x)
-        roi_y2 = min(height, anchor_y + range_y)
+        roi_x2 = min(detect_width, anchor_x + range_x)
+        roi_y2 = min(detect_height, anchor_y + range_y)
 
-        # 只對ROI區域執行高斯模糊和Canny（效能優化）
-        roi_gray = gray[roi_y1:roi_y2, roi_x1:roi_x2]
+        # 只對ROI區域執行高斯模糊和Canny
+        roi_gray = gray_small[roi_y1:roi_y2, roi_x1:roi_x2]
         roi_blurred = cv2.GaussianBlur(roi_gray, (5, 5), 0)
 
-        # Canny 邊緣檢測 只在ROI區域執行
+        # Canny 邊緣檢測
         low_threshold = int(self.threshold * 0.5)
         high_threshold = self.threshold
         roi_edges = cv2.Canny(roi_blurred, low_threshold, high_threshold)
 
-        # 形態學閉合操作：連接斷裂的邊緣，讓輪廓更連續
+        # 形態學閉合操作
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
         roi_edges = cv2.morphologyEx(roi_edges, cv2.MORPH_CLOSE, kernel)
 
-        # 建立完整尺寸的edges圖像 只有ROI區域有內容
-        edges = np.zeros_like(gray)
+        # 建立縮小尺寸的edges圖像
+        edges = np.zeros_like(gray_small)
         edges[roi_y1:roi_y2, roi_x1:roi_x2] = roi_edges
 
         # 時間平滑
         if self.previous_edges is not None and self.temporal_alpha < 100:
-            # 如果anchor/range改變，提高alpha值加速更新，但不完全跳過平滑
             if anchor_moved or range_changed:
-                alpha = min(0.9, self.temporal_alpha / 100.0 + 0.3)  # 更快更新
+                alpha = min(0.9, self.temporal_alpha / 100.0 + 0.3)
             else:
                 alpha = self.temporal_alpha / 100.0
             edges = cv2.addWeighted(edges, alpha, self.previous_edges, 1 - alpha, 0)
@@ -167,7 +170,7 @@ class ContourScanner:
 
         self.previous_edges = edges.copy()
 
-        # 找輪廓 現在只會找到ROI內的輪廓
+        # 找輪廓
         contours, hierarchy = cv2.findContours(
             edges,
             cv2.RETR_EXTERNAL,
@@ -178,7 +181,7 @@ class ContourScanner:
             self.contour_points = []
             return edges
 
-        # 過濾太短的輪廓（最小限制：至少 2 個點）
+        # 過濾太短的輪廓
         valid_contours = [c for c in contours if len(c) > 1]
 
         if not valid_contours:
@@ -186,27 +189,24 @@ class ContourScanner:
             self.cached_contours = []
             return edges
 
-        # 快取找到的輪廓，供快速重新過濾使用
         self.cached_contours = valid_contours
 
-        # 簡單邏輯：過濾所有輪廓，只保留在 ROI 內的點，選最長的
-        anchor_x = int(self.anchor_x_pct * width / 100.0)
-        anchor_y = int(self.anchor_y_pct * height / 100.0)
+        # 過濾輪廓並放大座標回原始解析度
         range_radius = ((range_x ** 2 + range_y ** 2) ** 0.5)
-        range_radius_sq = range_radius ** 2  # 用平方比較，避免開根號
-
-        # 對每個輪廓，過濾出在 ROI 內的點
+        range_radius_sq = range_radius ** 2
         best_filtered_contour = []
 
         for contour in valid_contours:
             filtered_points = []
             for point in contour:
                 x, y = point[0]
-                dist_sq = (x - anchor_x) ** 2 + (y - anchor_y) ** 2  # 不開根號，直接比較平方
+                dist_sq = (x - anchor_x) ** 2 + (y - anchor_y) ** 2
                 if dist_sq <= range_radius_sq:
-                    filtered_points.append((int(x), int(y)))
+                    # 放大座標回原始解析度
+                    x_scaled = int(x / detection_scale)
+                    y_scaled = int(y / detection_scale)
+                    filtered_points.append((x_scaled, y_scaled))
 
-            # 選擇過濾後最長的輪廓
             if len(filtered_points) > len(best_filtered_contour):
                 best_filtered_contour = filtered_points
 

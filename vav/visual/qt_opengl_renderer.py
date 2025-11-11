@@ -6,6 +6,7 @@ Optimized for PyQt6 on macOS with custom shaders
 import numpy as np
 from typing import List
 import threading
+import cv2
 from PyQt6.QtOpenGLWidgets import QOpenGLWidget
 from PyQt6.QtCore import QSize, Qt, pyqtSignal, QMutex, QMutexLocker
 from PyQt6.QtGui import QSurfaceFormat
@@ -44,11 +45,35 @@ class QtMultiverseRenderer(QOpenGLWidget):
     }
     """
 
+    # Overlay vertex shader (2D pixel coordinates -> NDC)
+    OVERLAY_VERTEX_SHADER = """
+    #version 330 core
+    layout(location = 0) in vec2 position;  // Pixel coordinates
+    uniform mat4 projection;  // Orthographic projection matrix
+
+    void main() {
+        gl_Position = projection * vec4(position, 0.0, 1.0);
+    }
+    """
+
+    # Overlay fragment shader (solid color with alpha)
+    OVERLAY_FRAGMENT_SHADER = """
+    #version 330 core
+    uniform vec4 color;  // RGBA color
+    out vec4 fragColor;
+
+    void main() {
+        fragColor = color;
+    }
+    """
+
     # Fragment shader with curve, angle, region map support
     FRAGMENT_SHADER = """
     #version 330 core
     uniform sampler2D audio_tex;
     uniform sampler2D region_tex;
+    uniform sampler2D camera_tex;  // Camera input for GPU region calculation
+    uniform sampler2D camera_blend_tex;  // Camera/SD frame for final blending
     uniform vec4 frequencies;
     uniform vec4 intensities;
     uniform vec4 curves;
@@ -58,8 +83,10 @@ class QtMultiverseRenderer(QOpenGLWidget):
     uniform int blend_mode;
     uniform float brightness;
     uniform int use_region_map;
+    uniform int use_gpu_region;  // 0=use region_tex, 1=calculate in shader
     uniform float base_hue;
     uniform vec3 envelope_offsets;  // env1-3 values (0.0-1.0)
+    uniform float camera_mix;  // 0.0-1.0, blend strength for camera/SD input
 
     in vec2 v_texcoord;
     out vec4 fragColor;
@@ -141,12 +168,29 @@ class QtMultiverseRenderer(QOpenGLWidget):
     }
 
     void main() {
-        // Get region ID if using region map
+        // Get region ID
         int currentRegion = -1;
         if (use_region_map > 0) {
-            // Flip Y coordinate for region map (OpenGL texture coordinates)
-            float regionVal = texture(region_tex, vec2(v_texcoord.x, 1.0 - v_texcoord.y)).r;
-            currentRegion = int(regionVal * 255.0);
+            if (use_gpu_region > 0) {
+                // GPU-based region calculation from camera texture
+                vec3 cameraColor = texture(camera_tex, vec2(v_texcoord.x, 1.0 - v_texcoord.y)).rgb;
+                float brightness_val = dot(cameraColor, vec3(0.299, 0.587, 0.114));  // RGB to grayscale
+
+                // Brightness-based region (4 levels)
+                if (brightness_val < 0.25) {
+                    currentRegion = 0;  // CH1: very dark
+                } else if (brightness_val < 0.5) {
+                    currentRegion = 1;  // CH2: medium dark
+                } else if (brightness_val < 0.75) {
+                    currentRegion = 2;  // CH3: medium bright
+                } else {
+                    currentRegion = 3;  // CH4: very bright
+                }
+            } else {
+                // CPU-based region map from texture
+                float regionVal = texture(region_tex, vec2(v_texcoord.x, 1.0 - v_texcoord.y)).r;
+                currentRegion = int(regionVal * 255.0);
+            }
         }
 
         // Render and blend all channels
@@ -222,6 +266,39 @@ class QtMultiverseRenderer(QOpenGLWidget):
 
         // Apply brightness
         result.rgb *= brightness;
+
+        // GPU Blend: Blend with camera/SD input if camera_mix > 0
+        if (camera_mix > 0.001) {
+            // Sample camera blend texture (flip Y to match OpenCV coordinate system)
+            vec3 camera_color = texture(camera_blend_tex, vec2(v_texcoord.x, 1.0 - v_texcoord.y)).rgb;
+
+            // Apply camera_mix as alpha
+            vec3 blend_color = camera_color * camera_mix;
+
+            // Apply blend mode (same logic as CPU blend in controller.py:653-664)
+            vec3 blended;
+            if (blend_mode == 0) {  // Add
+                blended = clamp(result.rgb + blend_color, 0.0, 1.0);
+            } else if (blend_mode == 1) {  // Screen
+                blended = vec3(1.0) - (vec3(1.0) - result.rgb) * (vec3(1.0) - blend_color);
+            } else if (blend_mode == 2) {  // Difference
+                blended = abs(result.rgb - blend_color);
+            } else if (blend_mode == 3) {  // Color Dodge
+                blended = vec3(0.0);
+                for (int i = 0; i < 3; i++) {
+                    if (blend_color[i] < 0.999) {
+                        blended[i] = clamp(result.rgb[i] / max(0.001, 1.0 - blend_color[i]), 0.0, 1.0);
+                    } else {
+                        blended[i] = 1.0;
+                    }
+                }
+            } else {
+                blended = result.rgb;
+            }
+
+            result.rgb = blended;
+        }
+
         fragColor = result;
     }
     """
@@ -253,14 +330,23 @@ class QtMultiverseRenderer(QOpenGLWidget):
         self.vbo = None
         self.audio_tex = None
         self.region_tex = None
+        self.camera_tex = None  # Camera input for GPU region calculation
+        self.camera_blend_tex = None  # Camera/SD frame for final blending
         self.fbo = None
         self.fbo_tex = None
+
+        # Overlay rendering resources
+        self.overlay_shader_program = None
+        self.overlay_vao = None
+        self.overlay_vbo = None
+        self.overlay_projection_matrix = None
 
         # Rendering parameters
         self.blend_mode = 0
         self.brightness = 2.5
         self.base_hue = 0.0  # Base hue in range 0.0-1.0
         self.envelope_offsets = np.array([0.0, 0.0, 0.0], dtype=np.float32)  # env1-3 values (0.0-1.0)
+        self.camera_mix = 0.0  # GPU blend strength (0.0-1.0)
 
         # Audio data
         self.audio_data = np.zeros((4, width), dtype=np.float32)
@@ -274,6 +360,14 @@ class QtMultiverseRenderer(QOpenGLWidget):
         # Region map data
         self.region_map_data = None
         self.use_region_map = 0
+        self.use_gpu_region = 0  # 0=CPU region (region_tex), 1=GPU region (camera_tex)
+        self.camera_frame_data = None  # Camera frame for GPU region calculation
+        self.camera_blend_frame_data = None  # Camera/SD frame for GPU blending
+
+        # Overlay data (contours, scan point, rings)
+        self.overlay_contour_points = []  # List of (x, y) in pixel coordinates
+        self.overlay_scan_point = None  # (x, y) in pixel coordinates
+        self.overlay_rings = []  # List of {pos: (x,y), radius: float, color: (r,g,b), alpha: float}
 
         # Rendered output (thread-safe access)
         self.rendered_image = None
@@ -283,6 +377,11 @@ class QtMultiverseRenderer(QOpenGLWidget):
         self.render_complete_event = threading.Event()
         self.pending_channels_data = None
         self.pending_region_map = None
+        self.pending_camera_frame = None
+        self.pending_use_gpu_region = False
+        self.pending_overlay_data = None
+        self.pending_blend_frame = None
+        self.pending_camera_mix = 0.0
         self.channels_data_mutex = QMutex()
 
         # Store the thread that created this renderer (GUI thread)
@@ -382,6 +481,26 @@ class QtMultiverseRenderer(QOpenGLWidget):
         glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, self.render_width, self.render_height, 0,
                      GL_RED, GL_UNSIGNED_BYTE, None)
 
+        # Create camera texture (for GPU region calculation)
+        self.camera_tex = glGenTextures(1)
+        glBindTexture(GL_TEXTURE_2D, self.camera_tex)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, self.render_width, self.render_height, 0,
+                     GL_RGB, GL_UNSIGNED_BYTE, None)
+
+        # Create camera blend texture (for final GPU blending with camera/SD input)
+        self.camera_blend_tex = glGenTextures(1)
+        glBindTexture(GL_TEXTURE_2D, self.camera_blend_tex)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, self.render_width, self.render_height, 0,
+                     GL_RGB, GL_UNSIGNED_BYTE, None)
+
         # Create framebuffer for offscreen rendering
         self.fbo = glGenFramebuffers(1)
         self.fbo_tex = glGenTextures(1)
@@ -412,7 +531,47 @@ class QtMultiverseRenderer(QOpenGLWidget):
         # Unbind framebuffer
         glBindFramebuffer(GL_FRAMEBUFFER, 0)
 
-        print("Qt OpenGL renderer initialized successfully")
+        # Compile overlay shaders
+        overlay_vertex_shader = shaders.compileShader(self.OVERLAY_VERTEX_SHADER, GL_VERTEX_SHADER)
+        overlay_fragment_shader = shaders.compileShader(self.OVERLAY_FRAGMENT_SHADER, GL_FRAGMENT_SHADER)
+
+        self.overlay_shader_program = glCreateProgram()
+        glAttachShader(self.overlay_shader_program, overlay_vertex_shader)
+        glAttachShader(self.overlay_shader_program, overlay_fragment_shader)
+        glLinkProgram(self.overlay_shader_program)
+
+        # Check link status
+        link_status = glGetProgramiv(self.overlay_shader_program, GL_LINK_STATUS)
+        if not link_status:
+            info_log = glGetProgramInfoLog(self.overlay_shader_program)
+            raise RuntimeError(f"Overlay shader program link failed: {info_log.decode('utf-8')}")
+
+        glDeleteShader(overlay_vertex_shader)
+        glDeleteShader(overlay_fragment_shader)
+
+        # Create overlay VAO and VBO (dynamic buffer for line vertices)
+        self.overlay_vao = glGenVertexArrays(1)
+        glBindVertexArray(self.overlay_vao)
+
+        self.overlay_vbo = glGenBuffers(1)
+        glBindBuffer(GL_ARRAY_BUFFER, self.overlay_vbo)
+        # Allocate buffer for max 10000 vertices (large enough for contours)
+        glBufferData(GL_ARRAY_BUFFER, 10000 * 2 * 4, None, GL_DYNAMIC_DRAW)  # vec2 * float32
+
+        # Position attribute (location 0)
+        glEnableVertexAttribArray(0)
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 8, ctypes.c_void_p(0))
+
+        glBindVertexArray(0)
+
+        # Create orthographic projection matrix (pixel coordinates to NDC)
+        # Screen coordinates: (0,0) = top-left, (width,height) = bottom-right
+        # Parameters: left, right, bottom, top, near, far
+        self.overlay_projection_matrix = self._create_ortho_matrix(
+            0, self.render_width, 0, self.render_height, -1, 1
+        )
+
+        print("Qt OpenGL renderer initialized successfully (with overlay support)")
 
     def resizeGL(self, w, h):
         """Handle window resize"""
@@ -431,6 +590,9 @@ class QtMultiverseRenderer(QOpenGLWidget):
         # Bind framebuffer for offscreen rendering
         glBindFramebuffer(GL_FRAMEBUFFER, self.fbo)
 
+        # Specify draw buffer for FBO
+        glDrawBuffer(GL_COLOR_ATTACHMENT0)
+
         # Verify framebuffer is complete
         if glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE:
             print("Error: Framebuffer not complete in paintGL")
@@ -440,73 +602,141 @@ class QtMultiverseRenderer(QOpenGLWidget):
         # Set viewport to render resolution
         glViewport(0, 0, self.render_width, self.render_height)
 
-        # Clear to black
-        glClear(GL_COLOR_BUFFER_BIT)
+        # Clear to black and reset depth
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
 
-        # Use shader program
-        glUseProgram(self.shader_program)
+        # Render Multiverse
+        skip_multiverse = False
 
-        # Update audio texture
-        # NOTE: audio_data is (4, width) C-contiguous, which matches OpenGL row-major layout
-        # Row 0 = Channel 0, Row 1 = Channel 1, etc. - NO transpose needed!
-        glActiveTexture(GL_TEXTURE0)
-        glBindTexture(GL_TEXTURE_2D, self.audio_tex)
+        if not skip_multiverse:
+            # Use shader program
+            glUseProgram(self.shader_program)
 
-        # DEBUG: 每 500 幀檢查一次 audio_data (降低頻率以提升效能)
-        if not hasattr(self, '_audio_debug_counter'):
-            self._audio_debug_counter = 0
-        self._audio_debug_counter += 1
-        if self._audio_debug_counter == 500:
-            print(f"[Qt OpenGL DEBUG] audio_data shape: {self.audio_data.shape}, Ch0 range: [{self.audio_data[0].min():.2f}, {self.audio_data[0].max():.2f}]")
+            # Update audio texture
+            glActiveTexture(GL_TEXTURE0)
+            glBindTexture(GL_TEXTURE_2D, self.audio_tex)
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, self.render_width, 4,
+                           GL_RED, GL_FLOAT, self.audio_data)
 
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, self.render_width, 4,
-                       GL_RED, GL_FLOAT, self.audio_data)
+            # Update region texture if available (CPU region mode)
+            if self.region_map_data is not None:
+                glActiveTexture(GL_TEXTURE1)
+                glBindTexture(GL_TEXTURE_2D, self.region_tex)
+                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, self.render_width, self.render_height,
+                               GL_RED, GL_UNSIGNED_BYTE, self.region_map_data)
 
-        # Update region texture if available
-        if self.region_map_data is not None:
+            # Update camera texture if available (GPU region mode)
+            if self.camera_frame_data is not None:
+                glActiveTexture(GL_TEXTURE2)
+                glBindTexture(GL_TEXTURE_2D, self.camera_tex)
+                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, self.render_width, self.render_height,
+                               GL_RGB, GL_UNSIGNED_BYTE, self.camera_frame_data)
+
+            # Update camera blend texture if available (GPU blend mode)
+            if self.camera_blend_frame_data is not None:
+                glActiveTexture(GL_TEXTURE3)
+                glBindTexture(GL_TEXTURE_2D, self.camera_blend_tex)
+                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, self.render_width, self.render_height,
+                               GL_RGB, GL_UNSIGNED_BYTE, self.camera_blend_frame_data)
+
+            # Set uniforms
+            glUniform1i(glGetUniformLocation(self.shader_program, b"audio_tex"), 0)
+            glUniform1i(glGetUniformLocation(self.shader_program, b"region_tex"), 1)
+            glUniform1i(glGetUniformLocation(self.shader_program, b"camera_tex"), 2)
+            glUniform1i(glGetUniformLocation(self.shader_program, b"camera_blend_tex"), 3)
+            glUniform4fv(glGetUniformLocation(self.shader_program, b"frequencies"),
+                        1, self.frequencies)
+            glUniform4fv(glGetUniformLocation(self.shader_program, b"intensities"),
+                        1, self.intensities)
+            glUniform4fv(glGetUniformLocation(self.shader_program, b"curves"),
+                        1, self.curves)
+            glUniform4fv(glGetUniformLocation(self.shader_program, b"angles"),
+                        1, self.angles)
+            glUniform4fv(glGetUniformLocation(self.shader_program, b"ratios"),
+                        1, self.ratios)
+            glUniform4fv(glGetUniformLocation(self.shader_program, b"enabled_mask"),
+                        1, self.enabled_mask)
+            glUniform1i(glGetUniformLocation(self.shader_program, b"blend_mode"),
+                       self.blend_mode)
+            glUniform1f(glGetUniformLocation(self.shader_program, b"brightness"),
+                       self.brightness)
+            glUniform1i(glGetUniformLocation(self.shader_program, b"use_region_map"),
+                       self.use_region_map)
+            glUniform1i(glGetUniformLocation(self.shader_program, b"use_gpu_region"),
+                       self.use_gpu_region)
+            glUniform1f(glGetUniformLocation(self.shader_program, b"base_hue"),
+                       self.base_hue)
+            glUniform3f(glGetUniformLocation(self.shader_program, b"envelope_offsets"),
+                       self.envelope_offsets[0], self.envelope_offsets[1], self.envelope_offsets[2])
+            glUniform1f(glGetUniformLocation(self.shader_program, b"camera_mix"),
+                       self.camera_mix)
+
+            # Bind textures and draw Multiverse
+            glActiveTexture(GL_TEXTURE0)
+            glBindTexture(GL_TEXTURE_2D, self.audio_tex)
             glActiveTexture(GL_TEXTURE1)
             glBindTexture(GL_TEXTURE_2D, self.region_tex)
-            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, self.render_width, self.render_height,
-                           GL_RED, GL_UNSIGNED_BYTE, self.region_map_data)
+            glBindVertexArray(self.vao)
+            glDrawArrays(GL_TRIANGLE_STRIP, 0, 4)
 
-        # Set uniforms
-        glUniform1i(glGetUniformLocation(self.shader_program, b"audio_tex"), 0)
-        glUniform1i(glGetUniformLocation(self.shader_program, b"region_tex"), 1)
-        glUniform4fv(glGetUniformLocation(self.shader_program, b"frequencies"),
-                    1, self.frequencies)
-        glUniform4fv(glGetUniformLocation(self.shader_program, b"intensities"),
-                    1, self.intensities)
-        glUniform4fv(glGetUniformLocation(self.shader_program, b"curves"),
-                    1, self.curves)
-        glUniform4fv(glGetUniformLocation(self.shader_program, b"angles"),
-                    1, self.angles)
-        glUniform4fv(glGetUniformLocation(self.shader_program, b"ratios"),
-                    1, self.ratios)
-        glUniform4fv(glGetUniformLocation(self.shader_program, b"enabled_mask"),
-                    1, self.enabled_mask)
-        glUniform1i(glGetUniformLocation(self.shader_program, b"blend_mode"),
-                   self.blend_mode)
-        glUniform1f(glGetUniformLocation(self.shader_program, b"brightness"),
-                   self.brightness)
-        glUniform1i(glGetUniformLocation(self.shader_program, b"use_region_map"),
-                   self.use_region_map)
-        glUniform1f(glGetUniformLocation(self.shader_program, b"base_hue"),
-                   self.base_hue)
-        glUniform3f(glGetUniformLocation(self.shader_program, b"envelope_offsets"),
-                   self.envelope_offsets[0], self.envelope_offsets[1], self.envelope_offsets[2])
+            # Reset OpenGL state for overlay
+            glBindVertexArray(0)
+            glUseProgram(0)
 
-        # DEBUG: 每 500 幀輸出 uniform 值
-        if self._audio_debug_counter == 500:
-            print(f"[Qt OpenGL DEBUG] intensities: {self.intensities}, brightness: {self.brightness}")
-            self._audio_debug_counter = 0  # Reset counter
+            # Unbind all textures
+            glActiveTexture(GL_TEXTURE0)
+            glBindTexture(GL_TEXTURE_2D, 0)
+            glActiveTexture(GL_TEXTURE1)
+            glBindTexture(GL_TEXTURE_2D, 0)
+            glActiveTexture(GL_TEXTURE2)
+            glBindTexture(GL_TEXTURE_2D, 0)
+            glActiveTexture(GL_TEXTURE3)
+            glBindTexture(GL_TEXTURE_2D, 0)
+            glActiveTexture(GL_TEXTURE0)
 
-        # Bind textures and draw
-        glActiveTexture(GL_TEXTURE0)
-        glBindTexture(GL_TEXTURE_2D, self.audio_tex)
-        glActiveTexture(GL_TEXTURE1)
-        glBindTexture(GL_TEXTURE_2D, self.region_tex)
-        glBindVertexArray(self.vao)
-        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4)
+        # DEBUG: Test if we can modify FBO after Multiverse
+        if not hasattr(self, '_fbo_write_test'):
+            # Try to clear a small region to red to test if FBO is writable
+            glEnable(GL_SCISSOR_TEST)
+            glScissor(0, 0, 50, 50)  # Bottom-left 50x50 pixels
+            glClearColor(1.0, 0.0, 0.0, 1.0)  # Red
+            glClear(GL_COLOR_BUFFER_BIT)
+            glDisable(GL_SCISSOR_TEST)
+            glClearColor(0.0, 0.0, 0.0, 1.0)  # Reset to black
+            print("[DEBUG] Attempted to clear 50x50 region to red after Multiverse")
+            self._fbo_write_test = True
+
+        # Disable blending for overlay
+        glDisable(GL_BLEND)
+
+        # Draw overlay on top (contours, scan point, rings) - GPU rendering
+        self._draw_overlay_gpu()
+
+        # DEBUG: Immediately after overlay read pixels to verify
+        if not hasattr(self, '_post_overlay_pixel_check'):
+            glFinish()
+            test_pixel = glReadPixels(100, 100, 1, 1, GL_RGB, GL_UNSIGNED_BYTE)
+            r, g, b = test_pixel[0], test_pixel[1], test_pixel[2]
+            print(f"[DEBUG] IMMEDIATELY after overlay at (100,100): RGB=({r},{g},{b})")
+            self._post_overlay_pixel_check = True
+
+        # Verify FBO is still bound before reading
+        current_fbo_before_read = glGetIntegerv(GL_FRAMEBUFFER_BINDING)
+        if current_fbo_before_read != self.fbo:
+            print(f"[ERROR] FBO changed before glReadPixels! Expected {self.fbo}, got {current_fbo_before_read}")
+
+        # CRITICAL: Wait for ALL GPU operations (including overlay) to complete
+        glFinish()
+
+        # Specify read buffer for FBO
+        glReadBuffer(GL_COLOR_ATTACHMENT0)
+
+        # DEBUG: Read a single pixel first to verify buffer content
+        if not hasattr(self, '_readpixels_debug'):
+            test_pixel = glReadPixels(100, 100, 1, 1, GL_RGB, GL_UNSIGNED_BYTE)
+            r, g, b = test_pixel[0], test_pixel[1], test_pixel[2]
+            print(f"[DEBUG] glReadPixels test at (100,100): RGB=({r},{g},{b})")
+            self._readpixels_debug = True
 
         # Read back pixels from FBO
         pixels = glReadPixels(0, 0, self.render_width, self.render_height,
@@ -520,7 +750,8 @@ class QtMultiverseRenderer(QOpenGLWidget):
 
         # Note: We don't render to screen since this is an offscreen renderer
 
-    def render(self, channels_data: List[dict], region_map: np.ndarray = None) -> np.ndarray:
+    def render(self, channels_data: List[dict], region_map: np.ndarray = None, camera_frame: np.ndarray = None, use_gpu_region: bool = False,
+               overlay_data: dict = None, blend_frame: np.ndarray = None, camera_mix: float = 0.0) -> np.ndarray:
         """
         Render all channels (THREAD-SAFE)
 
@@ -529,7 +760,12 @@ class QtMultiverseRenderer(QOpenGLWidget):
 
         Args:
             channels_data: List of channel data
-            region_map: Optional region map (height, width), uint8, values 0-3 for regions
+            region_map: Optional region map (height, width), uint8, values 0-3 for regions (CPU mode)
+            camera_frame: Optional camera frame (height, width, 3), uint8, BGR (GPU region mode)
+            use_gpu_region: If True, use GPU to calculate regions from camera_frame
+            overlay_data: Optional dict with 'contour_points', 'scan_point', 'rings' for GPU overlay
+            blend_frame: Optional camera/SD frame (height, width, 3), uint8, BGR for GPU blending
+            camera_mix: Blend strength (0.0-1.0) for GPU blending
 
         Returns:
             RGB image (height, width, 3), uint8
@@ -537,12 +773,13 @@ class QtMultiverseRenderer(QOpenGLWidget):
         # Check if we're already in the GUI thread
         if threading.current_thread() == self.gui_thread:
             # Direct rendering in GUI thread
-            return self._render_direct(channels_data, region_map)
+            return self._render_direct(channels_data, region_map, camera_frame, use_gpu_region, overlay_data, blend_frame, camera_mix)
         else:
             # Marshal to GUI thread via signal
-            return self._render_via_signal(channels_data, region_map)
+            return self._render_via_signal(channels_data, region_map, camera_frame, use_gpu_region, overlay_data, blend_frame, camera_mix)
 
-    def _render_direct(self, channels_data: List[dict], region_map: np.ndarray = None) -> np.ndarray:
+    def _render_direct(self, channels_data: List[dict], region_map: np.ndarray = None, camera_frame: np.ndarray = None, use_gpu_region: bool = False,
+                       overlay_data: dict = None, blend_frame: np.ndarray = None, camera_mix: float = 0.0) -> np.ndarray:
         """
         Render directly in GUI thread (internal use only)
         """
@@ -553,13 +790,63 @@ class QtMultiverseRenderer(QOpenGLWidget):
         self.angles.fill(0.0)
         self.ratios.fill(1.0)
 
-        # Handle region map
-        if region_map is not None and region_map.shape == (self.render_height, self.render_width):
+        # Handle overlay data
+        if overlay_data is not None:
+            self.overlay_contour_points = overlay_data.get('contour_points', [])
+            self.overlay_scan_point = overlay_data.get('scan_point', None)
+            self.overlay_rings = overlay_data.get('rings', [])
+
+            # DEBUG overlay data
+            if not hasattr(self, '_overlay_debug_counter'):
+                self._overlay_debug_counter = 0
+            self._overlay_debug_counter += 1
+            if self._overlay_debug_counter == 100:
+                print(f"[Overlay DEBUG] contour_points: {len(self.overlay_contour_points)}, scan_point: {self.overlay_scan_point}, rings: {len(self.overlay_rings)}")
+                self._overlay_debug_counter = 0
+        else:
+            self.overlay_contour_points = []
+            self.overlay_scan_point = None
+            self.overlay_rings = []
+
+        # Handle GPU blend frame (camera/SD input for blending)
+        if blend_frame is not None and camera_mix > 0.0:
+            # Resize blend_frame to match renderer output if needed
+            if blend_frame.shape[:2] != (self.render_height, self.render_width):
+                blend_frame_resized = cv2.resize(blend_frame, (self.render_width, self.render_height))
+            else:
+                blend_frame_resized = blend_frame
+            # Convert BGR to RGB for OpenGL
+            self.camera_blend_frame_data = cv2.cvtColor(blend_frame_resized, cv2.COLOR_BGR2RGB).astype(np.uint8)
+            self.camera_mix = camera_mix
+        else:
+            self.camera_blend_frame_data = None
+            self.camera_mix = 0.0
+
+        # Handle region calculation mode
+        if use_gpu_region and camera_frame is not None:
+            # GPU region mode: upload camera frame
+            if camera_frame.shape[:2] == (self.render_height, self.render_width):
+                # Convert BGR to RGB for OpenGL
+                self.camera_frame_data = cv2.cvtColor(camera_frame, cv2.COLOR_BGR2RGB).astype(np.uint8)
+                self.use_region_map = 1
+                self.use_gpu_region = 1
+                self.region_map_data = None
+            else:
+                # Fallback if size mismatch
+                self.use_region_map = 0
+                self.use_gpu_region = 0
+        elif region_map is not None and region_map.shape == (self.render_height, self.render_width):
+            # CPU region mode: use pre-calculated region map
             self.region_map_data = region_map.astype(np.uint8)
             self.use_region_map = 1
+            self.use_gpu_region = 0
+            self.camera_frame_data = None
         else:
+            # No region rendering
             self.region_map_data = None
+            self.camera_frame_data = None
             self.use_region_map = 0
+            self.use_gpu_region = 0
 
         # Debug: 每 100 幀輸出一次
         if not hasattr(self, '_debug_frame_count'):
@@ -618,7 +905,8 @@ class QtMultiverseRenderer(QOpenGLWidget):
             else:
                 return np.zeros((self.render_height, self.render_width, 3), dtype=np.uint8)
 
-    def _render_via_signal(self, channels_data: List[dict], region_map: np.ndarray = None) -> np.ndarray:
+    def _render_via_signal(self, channels_data: List[dict], region_map: np.ndarray = None, camera_frame: np.ndarray = None, use_gpu_region: bool = False,
+                           overlay_data: dict = None, blend_frame: np.ndarray = None, camera_mix: float = 0.0) -> np.ndarray:
         """
         Render via signal/slot to GUI thread (cross-thread safe)
         NON-BLOCKING: Returns previous frame immediately without waiting
@@ -640,6 +928,21 @@ class QtMultiverseRenderer(QOpenGLWidget):
             ]
             # Store region map (deep copy if present)
             self.pending_region_map = region_map.copy() if region_map is not None else None
+            # Store camera frame (deep copy if present)
+            self.pending_camera_frame = camera_frame.copy() if camera_frame is not None else None
+            self.pending_use_gpu_region = use_gpu_region
+            # Store overlay data (deep copy if present)
+            if overlay_data is not None:
+                self.pending_overlay_data = {
+                    'contour_points': list(overlay_data.get('contour_points', [])),
+                    'scan_point': overlay_data.get('scan_point', None),
+                    'rings': list(overlay_data.get('rings', []))
+                }
+            else:
+                self.pending_overlay_data = None
+            # Store blend frame (deep copy if present)
+            self.pending_blend_frame = blend_frame.copy() if blend_frame is not None else None
+            self.pending_camera_mix = camera_mix
 
         # Emit signal to GUI thread (queued connection)
         # 不等待完成 讓 GUI thread 在背景處理
@@ -668,13 +971,23 @@ class QtMultiverseRenderer(QOpenGLWidget):
                 return
             channels_data = self.pending_channels_data
             region_map = self.pending_region_map
+            camera_frame = self.pending_camera_frame
+            use_gpu_region = self.pending_use_gpu_region
+            overlay_data = self.pending_overlay_data
+            blend_frame = self.pending_blend_frame
+            camera_mix = self.pending_camera_mix
             self.pending_channels_data = None
             self.pending_region_map = None
+            self.pending_camera_frame = None
+            self.pending_use_gpu_region = False
+            self.pending_overlay_data = None
+            self.pending_blend_frame = None
+            self.pending_camera_mix = 0.0
         t_mutex = (time.perf_counter() - t0) * 1000
 
         # Perform rendering (we're now in GUI thread)
         t1 = time.perf_counter()
-        result = self._render_direct(channels_data, region_map)
+        result = self._render_direct(channels_data, region_map, camera_frame, use_gpu_region, overlay_data, blend_frame, camera_mix)
         t_render = (time.perf_counter() - t1) * 1000
 
         # Store result with mutex
@@ -714,6 +1027,288 @@ class QtMultiverseRenderer(QOpenGLWidget):
         """Set brightness (0-4)"""
         self.brightness = max(0.0, min(4.0, brightness))
 
+    def _create_ortho_matrix(self, left, right, bottom, top, near, far):
+        """Create orthographic projection matrix"""
+        matrix = np.eye(4, dtype=np.float32)
+        matrix[0, 0] = 2.0 / (right - left)
+        matrix[1, 1] = 2.0 / (top - bottom)
+        matrix[2, 2] = -2.0 / (far - near)
+        matrix[0, 3] = -(right + left) / (right - left)
+        matrix[1, 3] = -(top + bottom) / (top - bottom)
+        matrix[2, 3] = -(far + near) / (far - near)
+        return matrix
+
+    def _draw_overlay_gpu(self):
+        """Draw overlay elements using modern OpenGL (VBO + shaders)"""
+        if not OPENGL_AVAILABLE or self.overlay_shader_program is None:
+            return
+
+        # DEBUG: Check if function is called and log coordinates
+        if not hasattr(self, '_overlay_gpu_call_counter'):
+            self._overlay_gpu_call_counter = 0
+        self._overlay_gpu_call_counter += 1
+        if self._overlay_gpu_call_counter == 100:
+            print(f"[GPU Overlay] _draw_overlay_gpu called, contours={len(self.overlay_contour_points)}, scan={self.overlay_scan_point is not None}, rings={len(self.overlay_rings)}")
+            if len(self.overlay_contour_points) > 0:
+                contour_arr = np.array(self.overlay_contour_points)
+                print(f"[GPU Overlay DEBUG] Contour X range: [{contour_arr[:, 0].min():.1f}, {contour_arr[:, 0].max():.1f}], Y range: [{contour_arr[:, 1].min():.1f}, {contour_arr[:, 1].max():.1f}]")
+                print(f"[GPU Overlay DEBUG] Render size: {self.render_width}x{self.render_height}")
+            if self.overlay_scan_point is not None:
+                print(f"[GPU Overlay DEBUG] Scan point: {self.overlay_scan_point}")
+            # Check current OpenGL state
+            current_vao = glGetIntegerv(GL_VERTEX_ARRAY_BINDING)
+            current_program = glGetIntegerv(GL_CURRENT_PROGRAM)
+            current_fbo = glGetIntegerv(GL_FRAMEBUFFER_BINDING)
+            blend_enabled = glIsEnabled(GL_BLEND)
+            depth_enabled = glIsEnabled(GL_DEPTH_TEST)
+            print(f"[GPU Overlay DEBUG] GL State before overlay: VAO={current_vao}, Program={current_program}, FBO={current_fbo} (expected={self.fbo}), Blend={blend_enabled}, Depth={depth_enabled}")
+            self._overlay_gpu_call_counter = 0
+
+        # Disable blending and depth test - draw overlay directly on top
+        glDisable(GL_BLEND)
+        glDisable(GL_DEPTH_TEST)
+
+        # DEBUG: Verify FBO is still bound before drawing overlay
+        current_fbo_before_draw = glGetIntegerv(GL_FRAMEBUFFER_BINDING)
+        if current_fbo_before_draw != self.fbo:
+            print(f"[GPU Overlay ERROR] FBO changed! Expected {self.fbo}, got {current_fbo_before_draw}")
+            # Re-bind FBO
+            glBindFramebuffer(GL_FRAMEBUFFER, self.fbo)
+
+        # Use overlay shader
+        glUseProgram(self.overlay_shader_program)
+
+        # DEBUG: Verify shader program is active
+        if not hasattr(self, '_overlay_shader_verified'):
+            current_program_after_use = glGetIntegerv(GL_CURRENT_PROGRAM)
+            print(f"[GPU Overlay DEBUG] Overlay shader program: expected={self.overlay_shader_program}, actual={current_program_after_use}")
+
+            # DEBUG: Check if shader is linked correctly
+            link_status = glGetProgramiv(self.overlay_shader_program, GL_LINK_STATUS)
+            validate_status = glGetProgramiv(self.overlay_shader_program, GL_VALIDATE_STATUS)
+            print(f"[GPU Overlay DEBUG] Shader link_status={link_status}, validate_status={validate_status}")
+
+            # DEBUG: Check uniform locations
+            proj_loc_test = glGetUniformLocation(self.overlay_shader_program, b"projection")
+            color_loc_test = glGetUniformLocation(self.overlay_shader_program, b"color")
+            print(f"[GPU Overlay DEBUG] Uniform locations: projection={proj_loc_test}, color={color_loc_test}")
+
+            self._overlay_shader_verified = True
+
+        # Set projection matrix uniform
+        proj_loc = glGetUniformLocation(self.overlay_shader_program, b"projection")
+        glUniformMatrix4fv(proj_loc, 1, GL_FALSE, self.overlay_projection_matrix.flatten())
+
+        # Bind overlay VAO
+        glBindVertexArray(self.overlay_vao)
+
+        # DEBUG: Always draw test rect and check if it appears on EVERY frame
+        if not hasattr(self, '_overlay_test_counter'):
+            self._overlay_test_counter = 0
+        self._overlay_test_counter += 1
+
+        if self._overlay_test_counter == 50:  # Test on frame 50
+            # Draw bright green FILLED rectangle at top-left
+            test_rect = np.array([
+                [100.0, 1080.0 - 100.0], [200.0, 1080.0 - 100.0], [100.0, 1080.0 - 200.0],
+                [200.0, 1080.0 - 100.0], [200.0, 1080.0 - 200.0], [100.0, 1080.0 - 200.0],
+            ], dtype=np.float32)
+
+            # Unbind VAO first then rebind to ensure clean state
+            glBindVertexArray(0)
+
+            # Rebind overlay VAO
+            glBindVertexArray(self.overlay_vao)
+
+            # Explicitly setup vertex attribute again
+            glBindBuffer(GL_ARRAY_BUFFER, self.overlay_vbo)
+            glEnableVertexAttribArray(0)
+            glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 8, ctypes.c_void_p(0))
+
+            # Upload vertex data
+            glBufferSubData(GL_ARRAY_BUFFER, 0, test_rect.nbytes, test_rect)
+
+            color_loc = glGetUniformLocation(self.overlay_shader_program, b"color")
+            glUniform4f(color_loc, 0.0, 1.0, 0.0, 1.0)
+
+            # Verify uniform location is valid
+            print(f"[GPU Overlay DEBUG] Set color uniform location={color_loc} to (0,1,0,1)")
+
+            # Check GL error before draw
+            err1 = glGetError()
+            glDrawArrays(GL_TRIANGLES, 0, 6)
+            err2 = glGetError()
+
+            glFinish()
+
+            # Read pixel from test rect
+            pixel = glReadPixels(150, 1080 - 150, 1, 1, GL_RGB, GL_UNSIGNED_BYTE)
+            r, g, b = pixel[0], pixel[1], pixel[2]
+
+            # Also read current FBO binding
+            current_fbo = glGetIntegerv(GL_FRAMEBUFFER_BINDING)
+
+            # Save entire framebuffer to debug file
+            debug_pixels = glReadPixels(0, 0, self.render_width, self.render_height, GL_RGB, GL_UNSIGNED_BYTE)
+            debug_img = np.frombuffer(debug_pixels, dtype=np.uint8).reshape((self.render_height, self.render_width, 3))
+            debug_img = np.flipud(debug_img)
+            import cv2
+            cv2.imwrite('/Users/madzine/Desktop/overlay_test_frame50.png', cv2.cvtColor(debug_img, cv2.COLOR_RGB2BGR))
+
+            print(f"[GPU Overlay DEBUG FRAME 50] Test rect at (150,150): RGB=({r},{g},{b}), FBO={current_fbo}, GL_err={err1}/{err2}, saved to Desktop")
+
+        # TEST: Draw a simple line in NDC coordinates to verify shader works
+        if not hasattr(self, '_overlay_ndc_test'):
+            # Line from (-0.5, -0.5) to (0.5, 0.5) in NDC
+            test_line = np.array([
+                [-0.5, -0.5],
+                [0.5, 0.5]
+            ], dtype=np.float32)
+
+            glBindBuffer(GL_ARRAY_BUFFER, self.overlay_vbo)
+            glBufferSubData(GL_ARRAY_BUFFER, 0, test_line.nbytes, test_line)
+
+            color_loc = glGetUniformLocation(self.overlay_shader_program, b"color")
+            glUniform4f(color_loc, 1.0, 1.0, 0.0, 1.0)  # Yellow
+
+            # Use identity matrix to bypass projection
+            identity = np.eye(4, dtype=np.float32)
+            proj_loc = glGetUniformLocation(self.overlay_shader_program, b"projection")
+            glUniformMatrix4fv(proj_loc, 1, GL_FALSE, identity.flatten())
+
+            glDrawArrays(GL_LINES, 0, 2)
+            glFinish()
+            print("[TEST] Drew NDC test line from (-0.5,-0.5) to (0.5,0.5) in yellow")
+            self._overlay_ndc_test = True
+
+        # Draw contour lines (simplified - single pass due to macOS glLineWidth limitation)
+        if len(self.overlay_contour_points) > 1:
+            # Flip Y: screen coords (Y down) -> OpenGL coords (Y up)
+            vertices = np.array([
+                [x, self.render_height - y] for x, y in self.overlay_contour_points
+            ], dtype=np.float32)
+
+            # DEBUG: Log first few vertices after transformation
+            if not hasattr(self, '_overlay_vertex_logged'):
+                print(f"[GPU Overlay DEBUG] First 5 vertices after Y-flip: {vertices[:5]}")
+                print(f"[GPU Overlay DEBUG] Projection matrix:\n{self.overlay_projection_matrix}")
+                self._overlay_vertex_logged = True
+
+            # Upload vertices to VBO
+            glBindBuffer(GL_ARRAY_BUFFER, self.overlay_vbo)
+            glBufferSubData(GL_ARRAY_BUFFER, 0, vertices.nbytes, vertices)
+
+            # Bright green line for debugging (macOS Core Profile only supports glLineWidth(1.0))
+            color_loc = glGetUniformLocation(self.overlay_shader_program, b"color")
+
+            # DEBUG: Verify color uniform location
+            if not hasattr(self, '_color_uniform_checked'):
+                print(f"[GPU Overlay DEBUG] Color uniform location: {color_loc}")
+                self._color_uniform_checked = True
+
+            glUniform4f(color_loc, 0.0, 1.0, 0.0, 1.0)  # Bright green instead of white
+
+            # DEBUG: Check GL error before draw
+            err_before = glGetError()
+            if err_before != 0:
+                print(f"[GPU Overlay ERROR] GL error before draw: {err_before}")
+
+            glDrawArrays(GL_LINE_STRIP, 0, len(vertices))
+
+            # DEBUG: Check GL error after draw
+            err_after = glGetError()
+            if err_after != 0:
+                print(f"[GPU Overlay ERROR] GL error after draw: {err_after}")
+            elif not hasattr(self, '_overlay_draw_success_logged'):
+                print(f"[GPU Overlay DEBUG] Successfully drew {len(vertices)} vertices as LINE_STRIP")
+                self._overlay_draw_success_logged = True
+
+        # Draw scan point cross (simplified - single layer due to macOS limitation)
+        if self.overlay_scan_point is not None:
+            x, y = self.overlay_scan_point
+            y = self.render_height - y  # Flip Y
+            cross_size = 20.0
+
+            # Create cross vertices (horizontal + vertical lines)
+            cross_vertices = np.array([
+                # Horizontal line
+                [x - cross_size, y],
+                [x + cross_size, y],
+                # Vertical line
+                [x, y - cross_size],
+                [x, y + cross_size],
+            ], dtype=np.float32)
+
+            glBindBuffer(GL_ARRAY_BUFFER, self.overlay_vbo)
+            glBufferSubData(GL_ARRAY_BUFFER, 0, cross_vertices.nbytes, cross_vertices)
+
+            color_loc = glGetUniformLocation(self.overlay_shader_program, b"color")
+
+            # Bright cyan cross for debugging (single layer)
+            glUniform4f(color_loc, 0.0, 1.0, 1.0, 1.0)  # Cyan instead of pink
+            glDrawArrays(GL_LINES, 0, 4)
+
+        # Draw trigger rings (circles using line loop approximation)
+        for ring in self.overlay_rings:
+            pos_x, pos_y = ring['pos']
+            pos_y = self.render_height - pos_y  # Flip Y
+            radius = ring['radius']
+            color = ring['color']  # BGR tuple
+            alpha = ring['alpha']
+
+            # Convert BGR to RGB
+            r, g, b = color[2] / 255.0, color[1] / 255.0, color[0] / 255.0
+
+            # Generate circle vertices
+            num_segments = 32
+            circle_vertices = []
+            for i in range(num_segments):
+                theta = 2.0 * np.pi * i / num_segments
+                cx = pos_x + radius * np.cos(theta)
+                cy = pos_y + radius * np.sin(theta)
+                circle_vertices.append([cx, cy])
+            circle_vertices = np.array(circle_vertices, dtype=np.float32)
+
+            # Upload and draw
+            glBindBuffer(GL_ARRAY_BUFFER, self.overlay_vbo)
+            glBufferSubData(GL_ARRAY_BUFFER, 0, circle_vertices.nbytes, circle_vertices)
+
+            color_loc = glGetUniformLocation(self.overlay_shader_program, b"color")
+            glUniform4f(color_loc, r, g, b, alpha)
+            # No glLineWidth call - macOS only supports 1.0
+            glDrawArrays(GL_LINE_LOOP, 0, num_segments)
+
+        # Restore state
+        glBindVertexArray(0)
+        glUseProgram(0)
+
+        # DEBUG: Read a pixel from overlay area to verify it was drawn
+        # Sample a few pixels along the contour line to check if green is present
+        if len(self.overlay_contour_points) > 10 and not hasattr(self, '_overlay_pixel_check_logged'):
+            # Ensure all drawing is complete before reading pixels
+            glFinish()
+
+            # Sample 5 points along the contour
+            indices = [0, len(self.overlay_contour_points)//4, len(self.overlay_contour_points)//2,
+                      3*len(self.overlay_contour_points)//4, len(self.overlay_contour_points)-1]
+            print(f"[GPU Overlay DEBUG] Sampling {len(indices)} pixels from contour line (after glFinish)...")
+            for idx in indices:
+                cont_x, cont_y = self.overlay_contour_points[idx]
+                gl_y = self.render_height - cont_y
+                pixel = glReadPixels(int(cont_x), int(gl_y), 1, 1, GL_RGB, GL_UNSIGNED_BYTE)
+                r, g, b = pixel[0], pixel[1], pixel[2]
+                print(f"  Point {idx}: screen({int(cont_x)}, {int(cont_y)}) -> RGB=({r}, {g}, {b})")
+
+            # Also check scan point if available
+            if self.overlay_scan_point is not None:
+                scan_x, scan_y = self.overlay_scan_point
+                gl_y = self.render_height - scan_y
+                pixel = glReadPixels(scan_x, gl_y, 1, 1, GL_RGB, GL_UNSIGNED_BYTE)
+                r, g, b = pixel[0], pixel[1], pixel[2]
+                print(f"  Scan point: screen({scan_x}, {scan_y}) -> RGB=({r}, {g}, {b}) - Expected cyan (0, 255, 255)")
+
+            self._overlay_pixel_check_logged = True
+
     def cleanup(self):
         """Clean up OpenGL resources"""
         if not OPENGL_AVAILABLE:
@@ -727,10 +1322,22 @@ class QtMultiverseRenderer(QOpenGLWidget):
             glDeleteBuffers(1, [self.vbo])
         if self.audio_tex is not None:
             glDeleteTextures([self.audio_tex])
+        if self.region_tex is not None:
+            glDeleteTextures([self.region_tex])
+        if self.camera_tex is not None:
+            glDeleteTextures([self.camera_tex])
+        if self.camera_blend_tex is not None:
+            glDeleteTextures([self.camera_blend_tex])
         if self.fbo_tex is not None:
             glDeleteTextures([self.fbo_tex])
         if self.fbo is not None:
             glDeleteFramebuffers(1, [self.fbo])
+
+        # Clean up overlay resources
+        if self.overlay_vao is not None:
+            glDeleteVertexArrays(1, [self.overlay_vao])
+        if self.overlay_vbo is not None:
+            glDeleteBuffers(1, [self.overlay_vbo])
 
         self.doneCurrent()
 

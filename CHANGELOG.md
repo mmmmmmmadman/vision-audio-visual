@@ -2,6 +2,52 @@
 
 ---
 
+## [2025-11-11] 視覺系統全面改為 GPU 執行與 Overlay 渲染問題
+
+### 重大變更
+
+#### 1. 視覺系統全面 GPU 化
+**目標**: 將所有視覺處理從 CPU 移至 GPU 提升效能
+
+**已完成**:
+- Multiverse 渲染已完全在 GPU shader 執行
+- 新增 `glReadBuffer(GL_COLOR_ATTACHMENT0)` 確保正確讀取 FBO
+- 新增 `glDrawBuffer(GL_COLOR_ATTACHMENT0)` 確保正確寫入 FBO
+- 新增 `glFinish()` 確保 GPU 操作完成後才讀取
+
+**修改檔案**:
+- `vav/visual/qt_opengl_renderer.py`
+  - Line 594: 新增 glDrawBuffer 指定寫入 target
+  - Line 729: 新增 glReadBuffer 指定讀取 source
+  - Line 726: 新增 glFinish 同步 GPU 操作
+  - Line 603: 修正 glClear 同時清除 color 和 depth buffer
+
+#### 2. Overlay 渲染問題 (未解決)
+**問題**: Overlay (contour lines, scan point cross, trigger rings) 無法顯示在 Multiverse 上
+
+**已排除的原因**:
+- FBO 綁定正確 (測試確認 glClearColor 可以寫入)
+- OpenGL 狀態正確重置 (VAO, Program, Texture 都已 unbind)
+- Blend 和 Depth test 已正確 disable
+- Overlay shader 編譯連結成功 (link_status=1)
+- glReadPixels 正確從 GL_COLOR_ATTACHMENT0 讀取
+- Projection matrix 正確計算
+
+**測試結果**:
+- glClearColor 紅色測試: 成功顯示紅色畫面
+- Multiverse 渲染: 正常顯示
+- Overlay 渲染: glDrawArrays 無錯誤但畫面無變化
+- NDC 座標測試線: 無法顯示
+- Frame 50 測試矩形: 顯示紅色 (來自 glClear 而非 overlay shader)
+
+**待解決**:
+- Overlay shader 雖然編譯連結成功但實際繪製無效
+- 可能是 VAO attribute 設定問題
+- 可能是 shader 內部執行問題
+- 需要進一步 debug shader pipeline
+
+---
+
 ## [2025-11-11] Multiverse 視覺跳動修復與 ENV 圈圈恢復
 
 ### 修復內容

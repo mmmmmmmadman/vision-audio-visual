@@ -394,11 +394,11 @@ class VAVController:
             gray = cv2.cvtColor(cv_input_frame, cv2.COLOR_BGR2GRAY)
             t_gray = (time.time() - t0) * 1000
 
-            # Detect and extract contour (每10幀執行一次，避免影響audio thread)
+            # Detect and extract contour (每30幀執行一次，避免影響audio thread)
             t0 = time.time()
             if not hasattr(self, '_contour_frame_skip'):
                 self._contour_frame_skip = 0
-            self._contour_frame_skip = (self._contour_frame_skip + 1) % 10
+            self._contour_frame_skip = (self._contour_frame_skip + 1) % 30
             if self._contour_frame_skip == 0:
                 self.contour_cv_generator.detect_and_extract_contour(gray)
             t_contour = (time.time() - t0) * 1000
@@ -426,13 +426,12 @@ class VAVController:
             last_frame_time = current_time
             t_rings = (time.time() - t0) * 1000
 
-            # Generate visualization frame (for both GUI and virtual camera)
-            # Edge detection is now done inside Multiverse rendering (based on SD processed frame)
+            # Generate visualization frame
             t0 = time.time()
             display_frame = self._draw_visualization(frame)
             t_draw = (time.time() - t0) * 1000
 
-            # Callback for GUI frame update (send visualization, not raw frame)
+            # Callback for GUI frame update
             t0 = time.time()
             if self.frame_callback:
                 self.frame_callback(display_frame)
@@ -476,24 +475,47 @@ class VAVController:
 
     def _draw_visualization(self, frame):
         """Draw visualization using ContourCVGenerator overlay"""
+        # Process SD img2img first (if enabled) - applies to both simple and multiverse modes
+        input_frame = frame  # Default: use camera frame
+        if self.sd_enabled and self.sd_img2img:
+            # Feed camera frame to SD process
+            self.sd_img2img.feed_frame(frame)
+
+            # Get SD processed result
+            sd_output = self.sd_img2img.get_current_output()
+
+            # If SD has output, use it as base frame
+            if sd_output is not None:
+                # Ensure size matches
+                if sd_output.shape[:2] != frame.shape[:2]:
+                    sd_output = cv2.resize(sd_output, (frame.shape[1], frame.shape[0]))
+                input_frame = sd_output
+
+        # Now render based on mode (both modes use input_frame which may be SD output)
         if self.use_multiverse_rendering:
-            return self._render_multiverse(frame)
+            return self._render_multiverse(input_frame, original_frame=frame)
         else:
-            return self._render_simple(frame)
+            return self._render_simple(input_frame)
 
     def _render_simple(self, frame):
-        """Simple visualization: use ContourScanner overlay"""
-        # Use ContourScanner's draw_overlay method
+        """Simple visualization: use ContourScanner overlay on camera/SD frame"""
+        # Use ContourScanner's draw_overlay method (frame may be SD output)
         display_frame = self.contour_cv_generator.draw_overlay(frame, self.cv_values)
         return display_frame
 
-    def _render_multiverse(self, frame):
-        """Multiverse rendering: frequency-based color mapping with blend modes (Qt OpenGL on macOS, ModernGL on others)"""
+    def _render_multiverse(self, frame, original_frame=None):
+        """
+        Multiverse rendering: frequency-based color mapping with blend modes
+
+        Args:
+            frame: Input frame (may be SD output)
+            original_frame: Original camera frame (for blend if needed)
+        """
         if self.renderer is None:
             return self._render_simple(frame)
 
         # Timing for detailed profiling
-        t_sd_proc = 0.0
+        t_sd_proc = 0.0  # SD processing now done in _draw_visualization
         t_contour_dup = 0.0
         t_prepare_ch = 0.0
         t_region = 0.0
@@ -503,29 +525,10 @@ class VAVController:
         t_overlay = 0.0
         t_text = 0.0
 
-        # Process SD img2img first (if enabled) - SD processes camera frame, not rendered output
-        t0 = time.time()
-        input_frame = frame  # Default: use camera frame
-        if self.sd_enabled and self.sd_img2img:
-            # Feed camera frame to SD process
-            self.sd_img2img.feed_frame(frame)
-
-            # Get SD processed result
-            sd_output = self.sd_img2img.get_current_output()
-
-            # If SD has output, use it as input_frame
-            if sd_output is not None:
-                # Ensure size matches
-                if sd_output.shape[:2] != frame.shape[:2]:
-                    sd_output = cv2.resize(sd_output, (frame.shape[1], frame.shape[0]))
-                input_frame = sd_output
-        t_sd_proc = (time.time() - t0) * 1000
-
-        # NOTE: 移除重複的 contour detection（在 vision loop 中已做過）
-        # 這個重複操作浪費了 40ms！
-        # gray_input = cv2.cvtColor(input_frame, cv2.COLOR_BGR2GRAY)
-        # self.contour_cv_generator.detect_and_extract_contour(gray_input)
-        t_contour_dup = 0.0
+        # frame is already processed by SD (if enabled) in _draw_visualization
+        input_frame = frame
+        if original_frame is None:
+            original_frame = frame  # Fallback
 
         # Prepare channel data for Multiverse renderer
         t0 = time.time()
@@ -580,32 +583,78 @@ class VAVController:
         # Generate region map using input_frame (SD or camera) if region rendering is enabled
         t0 = time.time()
         region_map = None
+        use_gpu_region = False
+
         if self.use_region_rendering and self.region_mapper:
-            if self.region_mode == 'brightness':
-                region_map = self.region_mapper.create_brightness_based_regions(input_frame)
-            elif self.region_mode == 'color':
-                region_map = self.region_mapper.create_color_based_regions(input_frame)
-            elif self.region_mode == 'quadrant':
-                region_map = self.region_mapper.create_quadrant_regions(input_frame)
-            elif self.region_mode == 'edge':
-                region_map = self.region_mapper.create_edge_based_regions(input_frame)
+            # GPU region mode: only for brightness mode with Qt OpenGL renderer
+            if self.region_mode == 'brightness' and self.using_gpu:
+                # GPU calculates regions from camera frame directly
+                use_gpu_region = True
+                region_map = None  # No CPU region map needed
+            else:
+                # CPU region mode: calculate region map on CPU
+                if self.region_mode == 'brightness':
+                    region_map = self.region_mapper.create_brightness_based_regions(input_frame)
+                elif self.region_mode == 'color':
+                    region_map = self.region_mapper.create_color_based_regions(input_frame)
+                elif self.region_mode == 'quadrant':
+                    region_map = self.region_mapper.create_quadrant_regions(input_frame)
+                elif self.region_mode == 'edge':
+                    region_map = self.region_mapper.create_edge_based_regions(input_frame)
         t_region = (time.time() - t0) * 1000
 
-        # Update envelope offsets for GPU renderer (DISABLED - no internal CV modulation)
-        # if self.using_gpu and hasattr(self.renderer, 'set_envelope_offsets'):
-        #     self.renderer.set_envelope_offsets(
-        #         self.cv_values[0],  # env1 for channel 1
-        #         self.cv_values[1],  # env2 for channel 2
-        #         self.cv_values[2]   # env3 for channel 3
-        #     )
+        # Prepare overlay data for GPU rendering (if using Qt OpenGL)
+        overlay_data = None
+        if self.using_gpu:
+            # Extract overlay data from contour_cv_generator
+            overlay_data = {
+                'contour_points': self.contour_cv_generator.contour_points,
+                'scan_point': self.contour_cv_generator.current_scan_pos,
+                'rings': self.contour_cv_generator.trigger_rings
+            }
 
-        # Render using Multiverse engine (4 audio channels)
-        # Both Numba and Qt OpenGL renderers support region_map parameter
+        # Render using Multiverse engine with GPU blend (33-42ms CPU blend eliminated!)
         t0 = time.time()
-        if region_map is not None:
-            rendered_rgb = self.renderer.render(channels_data, region_map=region_map)
+
+        # Blend logic: if input_frame is SD output, show SD directly
+        # Otherwise, blend original camera with Multiverse based on camera_mix
+        if input_frame is not original_frame:
+            # SD is active: show SD output directly (no blend with Multiverse)
+            # Multiverse will be rendered, then SD will be blended at 100%
+            blend_frame = input_frame
+            camera_mix = 1.0  # Full replacement
         else:
-            rendered_rgb = self.renderer.render(channels_data)
+            # SD not active: use camera_mix for normal camera blending
+            blend_frame = original_frame
+            camera_mix = self.renderer_params['camera_mix']
+
+        if use_gpu_region:
+            # GPU region: pass camera frame for GPU calculation
+            rendered_rgb = self.renderer.render(
+                channels_data,
+                camera_frame=input_frame,
+                use_gpu_region=True,
+                overlay_data=overlay_data,
+                blend_frame=blend_frame,
+                camera_mix=camera_mix
+            )
+        elif region_map is not None:
+            # CPU region: pass pre-calculated region map
+            rendered_rgb = self.renderer.render(
+                channels_data,
+                region_map=region_map,
+                overlay_data=overlay_data,
+                blend_frame=blend_frame,
+                camera_mix=camera_mix
+            )
+        else:
+            # No region rendering
+            rendered_rgb = self.renderer.render(
+                channels_data,
+                overlay_data=overlay_data,
+                blend_frame=blend_frame,
+                camera_mix=camera_mix
+            )
         self.t_render = (time.time() - t0) * 1000  # ms
         t_render_call = self.t_render
 
@@ -614,48 +663,16 @@ class VAVController:
         rendered_bgr = cv2.cvtColor(rendered_rgb, cv2.COLOR_RGB2BGR)
         t_rgb2bgr = (time.time() - t0) * 1000
 
-        # Blend 5th layer (SD or camera) with Multiverse rendering if camera_mix > 0
-        # input_frame is either SD output or original camera frame
-        t0 = time.time()
-        camera_mix = self.renderer_params['camera_mix']
-        if camera_mix > 0.0:
-            # Resize input_frame to match renderer output if needed
-            if input_frame.shape[:2] != rendered_bgr.shape[:2]:
-                blend_frame = cv2.resize(input_frame, (rendered_bgr.shape[1], rendered_bgr.shape[0]))
-            else:
-                blend_frame = input_frame
-
-            # Apply blend mode (same as Multiverse channels)
-            blend_mode = self.renderer_params['blend_mode']
-
-            # Convert to float for blending (0-1 range)
-            base_float = rendered_bgr.astype(np.float32) / 255.0
-            blend_float = blend_frame.astype(np.float32) / 255.0
-
-            # Apply camera_mix as alpha
-            blend_float = blend_float * camera_mix
-
-            # Blend based on mode
-            if blend_mode == 0:  # Add
-                result = np.clip(base_float + blend_float, 0.0, 1.0)
-            elif blend_mode == 1:  # Screen
-                result = 1.0 - (1.0 - base_float) * (1.0 - blend_float)
-            elif blend_mode == 2:  # Difference
-                result = np.abs(base_float - blend_float)
-            elif blend_mode == 3:  # Color Dodge
-                result = np.where(blend_float < 0.999,
-                                 np.clip(base_float / np.maximum(0.001, 1.0 - blend_float), 0.0, 1.0),
-                                 1.0)
-            else:
-                result = base_float
-
-            # Convert back to uint8
-            rendered_bgr = (result * 255.0).astype(np.uint8)
-        t_blend = (time.time() - t0) * 1000
+        # GPU blend is now done inside the renderer (33-42ms CPU blend saved!)
+        t_blend = 0.0  # GPU blend time is included in t_render
 
         # Draw CV overlays (contour line, scan position, progress bar) - must be on top
+        # NOTE: If using GPU renderer, overlays are already drawn in GPU. Skip CPU overlay.
         t0 = time.time()
-        rendered_bgr = self.contour_cv_generator.draw_overlay(rendered_bgr, self.cv_values)
+        if not self.using_gpu:
+            # CPU rendering: draw overlays on CPU
+            rendered_bgr = self.contour_cv_generator.draw_overlay(rendered_bgr, self.cv_values)
+        # GPU rendering: overlays already drawn in GPU, skip this step
         t_overlay = (time.time() - t0) * 1000
 
         # Add info text
