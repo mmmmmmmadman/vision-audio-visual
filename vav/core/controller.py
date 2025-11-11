@@ -8,7 +8,7 @@ import threading
 import time
 import cv2
 
-from ..vision.camera import Camera
+from ..vision.camera import AsyncCamera
 from ..cv_generator.contour_scanner import ContourScanner
 from ..cv_generator.envelope import DecayEnvelope
 from ..audio.io import AudioIO
@@ -135,7 +135,7 @@ class VAVController:
 
         # Vision system
         camera_config = self.config.get("camera", {})
-        self.camera = Camera(
+        self.camera = AsyncCamera(
             device_id=camera_config.get("device_id", 0),
             width=camera_config.get("width", 1920),
             height=camera_config.get("height", 1080),
@@ -357,11 +357,24 @@ class VAVController:
 
             # Skip frames for performance
             if frame_counter % frame_skip != 0:
-                # Still update CV even on skipped frames
+                # Still update CV, scan and rings even on skipped frames
                 current_time = time.time()
-                if current_time - last_cv_update >= cv_update_time:
+                dt_since_last_update = current_time - last_cv_update
+                if dt_since_last_update >= cv_update_time:
+                    self.contour_cv_generator.update_scan(
+                        dt_since_last_update,
+                        frame.shape[1],
+                        frame.shape[0],
+                        envelopes=None,
+                        env_decay_times=self.env_decay_times
+                    )
                     self._update_cv_values()
                     last_cv_update = current_time
+
+                # Update trigger rings animation
+                frame_dt = current_time - last_frame_time if last_frame_time > 0 else 1.0/60.0
+                self.contour_cv_generator.update_trigger_rings(frame_dt)
+                last_frame_time = current_time
                 continue
 
             self.current_frame = frame
@@ -583,10 +596,10 @@ class VAVController:
         # Generate region map using input_frame (SD or camera) if region rendering is enabled
         t0 = time.time()
         region_map = None
-        use_gpu_region = False
+        use_gpu_region = True  # Default to GPU region mode
 
         if self.use_region_rendering and self.region_mapper:
-            # GPU region mode: only for brightness mode with Qt OpenGL renderer
+            # GPU region mode: default for brightness mode with Qt OpenGL renderer
             if self.region_mode == 'brightness' and self.using_gpu:
                 # GPU calculates regions from camera frame directly
                 use_gpu_region = True
@@ -716,6 +729,11 @@ class VAVController:
             cv_from_audio = self.audio_process.get_cv_values()
             if cv_from_audio is not None:
                 self.cv_values = cv_from_audio
+            else:
+                # Fallback: audio process 未回傳資料時，至少更新 SEQ1/SEQ2
+                # cv_values format: [ENV1, ENV2, ENV3, ENV4, SEQ1, SEQ2]
+                self.cv_values[4] = seq1_normalized  # SEQ1
+                self.cv_values[5] = seq2_normalized  # SEQ2
 
             # Trigger CV callback for GUI updates
             if self.cv_callback:

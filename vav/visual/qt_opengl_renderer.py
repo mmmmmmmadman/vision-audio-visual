@@ -571,6 +571,17 @@ class QtMultiverseRenderer(QOpenGLWidget):
             0, self.render_width, 0, self.render_height, -1, 1
         )
 
+        # Create PBOs for asynchronous pixel readback
+        self.pbo = glGenBuffers(2)
+        pbo_size = self.render_width * self.render_height * 3  # RGB
+        for i in range(2):
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, self.pbo[i])
+            glBufferData(GL_PIXEL_PACK_BUFFER, pbo_size, None, GL_STREAM_READ)
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0)
+
+        self.current_pbo = 0
+        self.pbo_ready = [False, False]
+
         print("Qt OpenGL renderer initialized successfully (with overlay support)")
 
     def resizeGL(self, w, h):
@@ -725,25 +736,35 @@ class QtMultiverseRenderer(QOpenGLWidget):
         if current_fbo_before_read != self.fbo:
             print(f"[ERROR] FBO changed before glReadPixels! Expected {self.fbo}, got {current_fbo_before_read}")
 
-        # CRITICAL: Wait for ALL GPU operations (including overlay) to complete
-        glFinish()
-
         # Specify read buffer for FBO
         glReadBuffer(GL_COLOR_ATTACHMENT0)
 
-        # DEBUG: Read a single pixel first to verify buffer content
-        if not hasattr(self, '_readpixels_debug'):
-            test_pixel = glReadPixels(100, 100, 1, 1, GL_RGB, GL_UNSIGNED_BYTE)
-            r, g, b = test_pixel[0], test_pixel[1], test_pixel[2]
-            print(f"[DEBUG] glReadPixels test at (100,100): RGB=({r},{g},{b})")
-            self._readpixels_debug = True
+        # PBO asynchronous readback
+        # 1. Start async read to current PBO
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, self.pbo[self.current_pbo])
+        glReadPixels(0, 0, self.render_width, self.render_height,
+                    GL_RGB, GL_UNSIGNED_BYTE, 0)  # offset=0 writes to PBO
+        self.pbo_ready[self.current_pbo] = True
 
-        # Read back pixels from FBO
-        pixels = glReadPixels(0, 0, self.render_width, self.render_height,
-                             GL_RGB, GL_UNSIGNED_BYTE)
-        self.rendered_image = np.frombuffer(pixels, dtype=np.uint8).reshape(
-            (self.render_height, self.render_width, 3))
-        self.rendered_image = np.flipud(self.rendered_image)  # Flip Y axis
+        # 2. Read from previous PBO if ready
+        prev_pbo = 1 - self.current_pbo
+        if self.pbo_ready[prev_pbo]:
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, self.pbo[prev_pbo])
+            data_ptr = glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY)
+            if data_ptr:
+                # Copy data from PBO
+                buffer_size = self.render_width * self.render_height * 3
+                pixels = ctypes.string_at(data_ptr, buffer_size)
+                self.rendered_image = np.frombuffer(pixels, dtype=np.uint8).reshape(
+                    (self.render_height, self.render_width, 3)).copy()
+                self.rendered_image = np.flipud(self.rendered_image)
+                glUnmapBuffer(GL_PIXEL_PACK_BUFFER)
+            self.pbo_ready[prev_pbo] = False
+
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0)
+
+        # 3. Switch PBO
+        self.current_pbo = 1 - self.current_pbo
 
         # Unbind FBO (return to default framebuffer)
         glBindFramebuffer(GL_FRAMEBUFFER, 0)
@@ -1108,61 +1129,6 @@ class QtMultiverseRenderer(QOpenGLWidget):
         glBindBuffer(GL_ARRAY_BUFFER, self.overlay_vbo)
         glEnableVertexAttribArray(0)
         glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 8, ctypes.c_void_p(0))
-
-        # DEBUG: Always draw test rect and check if it appears on EVERY frame
-        if not hasattr(self, '_overlay_test_counter'):
-            self._overlay_test_counter = 0
-        self._overlay_test_counter += 1
-
-        if self._overlay_test_counter == 50:  # Test on frame 50
-            # Draw bright green FILLED rectangle at top-left
-            test_rect = np.array([
-                [100.0, 1080.0 - 100.0], [200.0, 1080.0 - 100.0], [100.0, 1080.0 - 200.0],
-                [200.0, 1080.0 - 100.0], [200.0, 1080.0 - 200.0], [100.0, 1080.0 - 200.0],
-            ], dtype=np.float32)
-
-            # Unbind VAO first then rebind to ensure clean state
-            glBindVertexArray(0)
-
-            # Rebind overlay VAO
-            glBindVertexArray(self.overlay_vao)
-
-            # Explicitly setup vertex attribute again
-            glBindBuffer(GL_ARRAY_BUFFER, self.overlay_vbo)
-            glEnableVertexAttribArray(0)
-            glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 8, ctypes.c_void_p(0))
-
-            # Upload vertex data
-            glBufferSubData(GL_ARRAY_BUFFER, 0, test_rect.nbytes, test_rect)
-
-            color_loc = glGetUniformLocation(self.overlay_shader_program, b"color")
-            glUniform4f(color_loc, 0.0, 1.0, 0.0, 1.0)
-
-            # Verify uniform location is valid
-            print(f"[GPU Overlay DEBUG] Set color uniform location={color_loc} to (0,1,0,1)")
-
-            # Check GL error before draw
-            err1 = glGetError()
-            glDrawArrays(GL_TRIANGLES, 0, 6)
-            err2 = glGetError()
-
-            glFinish()
-
-            # Read pixel from test rect
-            pixel = glReadPixels(150, 1080 - 150, 1, 1, GL_RGB, GL_UNSIGNED_BYTE)
-            r, g, b = pixel[0], pixel[1], pixel[2]
-
-            # Also read current FBO binding
-            current_fbo = glGetIntegerv(GL_FRAMEBUFFER_BINDING)
-
-            # Save entire framebuffer to debug file
-            debug_pixels = glReadPixels(0, 0, self.render_width, self.render_height, GL_RGB, GL_UNSIGNED_BYTE)
-            debug_img = np.frombuffer(debug_pixels, dtype=np.uint8).reshape((self.render_height, self.render_width, 3))
-            debug_img = np.flipud(debug_img)
-            import cv2
-            cv2.imwrite('/Users/madzine/Desktop/overlay_test_frame50.png', cv2.cvtColor(debug_img, cv2.COLOR_RGB2BGR))
-
-            print(f"[GPU Overlay DEBUG FRAME 50] Test rect at (150,150): RGB=({r},{g},{b}), FBO={current_fbo}, GL_err={err1}/{err2}, saved to Desktop")
 
         # NDC test removed - was interfering with normal projection matrix
 

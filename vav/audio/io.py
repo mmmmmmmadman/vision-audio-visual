@@ -108,6 +108,20 @@ class AudioIO:
             else:
                 outdata.fill(0)
 
+        # Debug: verify device capabilities before opening stream
+        try:
+            devices = sd.query_devices()
+            if self.input_device is not None and self.input_device < len(devices):
+                in_dev = devices[self.input_device]
+                print(f"[AudioIO Debug] Input device {self.input_device}: {in_dev['name']}")
+                print(f"  max_input_channels: {in_dev['max_input_channels']}, requesting: {self.input_channels}")
+            if self.output_device is not None and self.output_device < len(devices):
+                out_dev = devices[self.output_device]
+                print(f"[AudioIO Debug] Output device {self.output_device}: {out_dev['name']}")
+                print(f"  max_output_channels: {out_dev['max_output_channels']}, requesting: {self.output_channels}")
+        except Exception as e:
+            print(f"[AudioIO Debug] Failed to query devices: {e}")
+
         self.stream = sd.Stream(
             samplerate=self.sample_rate,
             blocksize=self.buffer_size,

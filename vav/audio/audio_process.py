@@ -288,17 +288,23 @@ def audio_process_worker(
 
     # 啟動 audio stream
     print("[Audio Process] Starting audio stream...")
-    audio_io.start(audio_callback)
-    print("[Audio Process] Audio stream started")
+    try:
+        audio_io.start(audio_callback)
+        print("[Audio Process] Audio stream started")
 
-    # 等待停止信號
-    while not stop_event.is_set():
-        time.sleep(0.1)
+        # 等待停止信號
+        while not stop_event.is_set():
+            time.sleep(0.1)
 
-    # 停止 audio stream
-    print("[Audio Process] Stopping audio stream...")
-    audio_io.stop()
-    print("[Audio Process] Audio process terminated")
+        # 停止 audio stream
+        print("[Audio Process] Stopping audio stream...")
+        audio_io.stop()
+        print("[Audio Process] Audio process terminated")
+    except Exception as e:
+        print(f"[Audio Process] ERROR: Failed to start audio stream: {e}")
+        print("[Audio Process] Audio process will terminate")
+        # Don't raise - let the process exit gracefully
+        return
 
 
 class AudioProcess:

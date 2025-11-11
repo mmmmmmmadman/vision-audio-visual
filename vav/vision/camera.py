@@ -7,10 +7,88 @@ import numpy as np
 from typing import Optional, Tuple, List, Dict
 import subprocess
 import json
+import threading
+
+
+class AsyncCamera:
+    """Asynchronous webcam capture handler with background thread"""
+
+    def __init__(self, device_id: int = 0, width: int = 1920, height: int = 1080, fps: int = 30):
+        self.device_id = device_id
+        self.width = width
+        self.height = height
+        self.fps = fps
+        self.cap: Optional[cv2.VideoCapture] = None
+        self.is_opened = False
+
+        # Async reading
+        self.frame = None
+        self.frame_lock = threading.Lock()
+        self.running = False
+        self.read_thread = None
+
+    def open(self) -> bool:
+        """Open camera device and start background reading thread"""
+        self.cap = cv2.VideoCapture(self.device_id)
+        if not self.cap.isOpened():
+            return False
+
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+        self.cap.set(cv2.CAP_PROP_FPS, self.fps)
+
+        self.is_opened = True
+
+        # Start background thread
+        self.running = True
+        self.read_thread = threading.Thread(target=self._read_loop, daemon=True)
+        self.read_thread.start()
+
+        return True
+
+    def _read_loop(self):
+        """Background thread continuously reads frames"""
+        while self.running:
+            if self.cap is not None and self.cap.isOpened():
+                ret, frame = self.cap.read()
+                if ret:
+                    with self.frame_lock:
+                        self.frame = frame
+
+    def read(self) -> Tuple[bool, Optional[np.ndarray]]:
+        """Read latest frame (non-blocking)"""
+        if not self.is_opened:
+            return False, None
+
+        with self.frame_lock:
+            if self.frame is not None:
+                return True, self.frame.copy()
+            return False, None
+
+    def close(self):
+        """Close camera device and stop background thread"""
+        self.running = False
+        if self.read_thread is not None:
+            self.read_thread.join(timeout=1.0)
+
+        if self.cap is not None:
+            self.cap.release()
+            self.is_opened = False
+
+    def get_resolution(self) -> Tuple[int, int]:
+        """Get actual camera resolution"""
+        if self.cap is None:
+            return (0, 0)
+        w = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        return (w, h)
+
+    def __del__(self):
+        self.close()
 
 
 class Camera:
-    """Webcam capture handler"""
+    """Webcam capture handler (legacy synchronous version)"""
 
     def __init__(self, device_id: int = 0, width: int = 1920, height: int = 1080, fps: int = 30):
         self.device_id = device_id

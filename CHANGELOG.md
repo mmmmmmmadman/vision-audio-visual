@@ -2,6 +2,37 @@
 
 ---
 
+## [2025-11-11] CV Meter 訊號修復 + 效能優化後續問題修正
+
+### 問題修復
+
+**1. Frame 50 測試圖片自動儲存移除**
+- 移除 qt_opengl_renderer.py:1133-1186 的測試程式碼
+- 不再每次啟動時儲存 overlay_test_frame50.png 到桌面
+
+**2. Audio Stream 啟動錯誤處理**
+- 在 audio_process.py:291-307 添加 try/except 錯誤處理
+- 避免音訊串流啟動失敗時導致進程崩潰
+- 添加詳細錯誤訊息輸出
+
+**3. Audio 裝置除錯資訊**
+- 在 io.py:111-123 添加裝置頻道數檢查
+- 啟動前顯示裝置支援的 max_input_channels 和 max_output_channels
+- 顯示實際請求的頻道數方便診斷
+
+**4. CV Meter 訊號修復**
+- 修改 controller.py:732-736 添加 fallback 機制
+- 當 audio_process 未回傳資料時至少更新 SEQ1/SEQ2 值
+- 確保 CV meter 視窗能顯示掃描位置訊號
+
+### 效能數據
+
+- 正常運作: 333 FPS (3ms per frame)
+- 偶爾 GUI 更新延遲: 10-30ms
+- Audio stream 正常啟動 ES-8 裝置 4 輸入 7 輸出頻道
+
+---
+
 ## [2025-11-11] Overlay GPU 渲染問題完全修復
 
 ### 問題解決
