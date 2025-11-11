@@ -299,7 +299,7 @@ class QtMultiverseRenderer(QOpenGLWidget):
             result.rgb = blended;
         }
 
-        fragColor = result;
+        fragColor = vec4(result.rgb, 1.0);
     }
     """
 
@@ -1028,20 +1028,24 @@ class QtMultiverseRenderer(QOpenGLWidget):
         self.brightness = max(0.0, min(4.0, brightness))
 
     def _create_ortho_matrix(self, left, right, bottom, top, near, far):
-        """Create orthographic projection matrix"""
+        """Create orthographic projection matrix (OpenGL column-major)"""
         matrix = np.eye(4, dtype=np.float32)
         matrix[0, 0] = 2.0 / (right - left)
         matrix[1, 1] = 2.0 / (top - bottom)
         matrix[2, 2] = -2.0 / (far - near)
-        matrix[0, 3] = -(right + left) / (right - left)
-        matrix[1, 3] = -(top + bottom) / (top - bottom)
-        matrix[2, 3] = -(far + near) / (far - near)
+        matrix[3, 0] = -(right + left) / (right - left)
+        matrix[3, 1] = -(top + bottom) / (top - bottom)
+        matrix[3, 2] = -(far + near) / (far - near)
         return matrix
 
     def _draw_overlay_gpu(self):
         """Draw overlay elements using modern OpenGL (VBO + shaders)"""
         if not OPENGL_AVAILABLE or self.overlay_shader_program is None:
             return
+
+        # Ensure critical OpenGL states for fragment writing
+        glDrawBuffer(GL_COLOR_ATTACHMENT0)
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE)
 
         # DEBUG: Check if function is called and log coordinates
         if not hasattr(self, '_overlay_gpu_call_counter'):
@@ -1099,8 +1103,11 @@ class QtMultiverseRenderer(QOpenGLWidget):
         proj_loc = glGetUniformLocation(self.overlay_shader_program, b"projection")
         glUniformMatrix4fv(proj_loc, 1, GL_FALSE, self.overlay_projection_matrix.flatten())
 
-        # Bind overlay VAO
+        # Bind overlay VAO and explicitly reconfigure attributes
         glBindVertexArray(self.overlay_vao)
+        glBindBuffer(GL_ARRAY_BUFFER, self.overlay_vbo)
+        glEnableVertexAttribArray(0)
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 8, ctypes.c_void_p(0))
 
         # DEBUG: Always draw test rect and check if it appears on EVERY frame
         if not hasattr(self, '_overlay_test_counter'):
@@ -1157,29 +1164,7 @@ class QtMultiverseRenderer(QOpenGLWidget):
 
             print(f"[GPU Overlay DEBUG FRAME 50] Test rect at (150,150): RGB=({r},{g},{b}), FBO={current_fbo}, GL_err={err1}/{err2}, saved to Desktop")
 
-        # TEST: Draw a simple line in NDC coordinates to verify shader works
-        if not hasattr(self, '_overlay_ndc_test'):
-            # Line from (-0.5, -0.5) to (0.5, 0.5) in NDC
-            test_line = np.array([
-                [-0.5, -0.5],
-                [0.5, 0.5]
-            ], dtype=np.float32)
-
-            glBindBuffer(GL_ARRAY_BUFFER, self.overlay_vbo)
-            glBufferSubData(GL_ARRAY_BUFFER, 0, test_line.nbytes, test_line)
-
-            color_loc = glGetUniformLocation(self.overlay_shader_program, b"color")
-            glUniform4f(color_loc, 1.0, 1.0, 0.0, 1.0)  # Yellow
-
-            # Use identity matrix to bypass projection
-            identity = np.eye(4, dtype=np.float32)
-            proj_loc = glGetUniformLocation(self.overlay_shader_program, b"projection")
-            glUniformMatrix4fv(proj_loc, 1, GL_FALSE, identity.flatten())
-
-            glDrawArrays(GL_LINES, 0, 2)
-            glFinish()
-            print("[TEST] Drew NDC test line from (-0.5,-0.5) to (0.5,0.5) in yellow")
-            self._overlay_ndc_test = True
+        # NDC test removed - was interfering with normal projection matrix
 
         # Draw contour lines (simplified - single pass due to macOS glLineWidth limitation)
         if len(self.overlay_contour_points) > 1:

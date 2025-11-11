@@ -2,6 +2,65 @@
 
 ---
 
+## [2025-11-11] Overlay GPU 渲染問題完全修復
+
+### 問題解決
+
+#### Overlay 無法在 Multiverse 背景上顯示的根本原因
+
+經過三個 agents 並行深入調查發現三個關鍵問題
+
+**問題 1: Projection Matrix 列主序錯誤**
+- 平移分量錯誤放在 matrix[0-2, 3] 應該是 matrix[3, 0-2]
+- OpenGL 使用列主序矩陣但代碼使用了行主序的寫法
+- 導致所有頂點座標變換錯誤
+
+**問題 2: Multiverse Fragment Shader Alpha 輸出為 0**
+- Shader 輸出 fragColor = result 但 result.a 未設定導致 alpha=0
+- FBO 包含 RGB 有值但 alpha=0 的非法狀態
+- 後續 overlay 繪製時因 alpha blending 邏輯錯誤而被覆蓋
+
+**問題 3: VAO 狀態污染**
+- Multiverse 繪製後錯誤地調用 glDisableVertexAttribArray(1) 破壞全局狀態
+- Overlay VAO 只依賴初始化時的配置沒有在繪製前重新設定
+- 導致頂點屬性無法正確傳遞給 shader
+
+### 修復內容
+
+**修復 1: 更正 Projection Matrix** (qt_opengl_renderer.py Line 1036-1038)
+```python
+matrix[3, 0] = -(right + left) / (right - left)
+matrix[3, 1] = -(top + bottom) / (top - bottom)
+matrix[3, 2] = -(far + near) / (far - near)
+```
+
+**修復 2: Multiverse Shader 強制 Alpha=1.0** (qt_opengl_renderer.py Line 302)
+```glsl
+fragColor = vec4(result.rgb, 1.0);
+```
+
+**修復 3: 移除錯誤的 VAO 清理** (qt_opengl_renderer.py Line 682-684)
+移除 glDisableVertexAttribArray(1) 避免狀態污染
+
+**修復 4: Overlay 繪製前重新配置 VAO** (qt_opengl_renderer.py Line 1107-1110)
+```python
+glBindVertexArray(self.overlay_vao)
+glBindBuffer(GL_ARRAY_BUFFER, self.overlay_vbo)
+glEnableVertexAttribArray(0)
+glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 8, ctypes.c_void_p(0))
+```
+
+### 驗證結果
+
+Log 採樣結果確認修復成功
+- Point 0: RGB=(96, 191, 96) 綠色 overlay
+- Point 756: RGB=(0, 255, 0) 純綠色 overlay
+- Point 1513: RGB=(0, 255, 0) 純綠色 overlay
+
+Overlay contour lines scan point cross trigger rings 全部正常顯示在 Multiverse 背景上
+
+---
+
 ## [2025-11-11] 視覺系統全面改為 GPU 執行與 Overlay 渲染問題
 
 ### 重大變更
