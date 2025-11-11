@@ -598,13 +598,6 @@ class VAVController:
         region_map = None
         use_gpu_region = False  # Default to no region
 
-        # DEBUG: Log region rendering state every 100 frames
-        if not hasattr(self, '_region_debug_counter'):
-            self._region_debug_counter = 0
-        self._region_debug_counter += 1
-        if self._region_debug_counter % 100 == 0:
-            print(f"[Region DEBUG] use_region_rendering={self.use_region_rendering}, region_mapper={self.region_mapper is not None}, region_mode={self.region_mode}, using_gpu={self.using_gpu}")
-
         if self.use_region_rendering and self.region_mapper:
             # GPU region mode: default for brightness mode with Qt OpenGL renderer
             if self.region_mode == 'brightness' and self.using_gpu:

@@ -176,16 +176,6 @@ class QtMultiverseRenderer(QOpenGLWidget):
                 vec3 cameraColor = texture(camera_tex, vec2(v_texcoord.x, 1.0 - v_texcoord.y)).rgb;
                 float brightness_val = dot(cameraColor, vec3(0.299, 0.587, 0.114));  // RGB to grayscale
 
-                // DEBUG: Visualize region map by coloring pixels
-                // TEMPORARY: Uncomment to see region distribution
-                if (false) {  // Change to 'true' to enable visualization
-                    if (brightness_val < 0.25) fragColor = vec4(1.0, 0.0, 0.0, 1.0);  // Red = CH1 (darkest)
-                    else if (brightness_val < 0.5) fragColor = vec4(0.0, 1.0, 0.0, 1.0);  // Green = CH2
-                    else if (brightness_val < 0.75) fragColor = vec4(0.0, 0.0, 1.0, 1.0);  // Blue = CH3
-                    else fragColor = vec4(1.0, 1.0, 0.0, 1.0);  // Yellow = CH4 (brightest)
-                    return;
-                }
-
                 // Brightness-based region (4 levels)
                 if (brightness_val < 0.25) {
                     currentRegion = 0;  // CH1: very dark
@@ -714,31 +704,11 @@ class QtMultiverseRenderer(QOpenGLWidget):
             glBindTexture(GL_TEXTURE_2D, 0)
             glActiveTexture(GL_TEXTURE0)
 
-        # DEBUG: Test if we can modify FBO after Multiverse
-        if not hasattr(self, '_fbo_write_test'):
-            # Try to clear a small region to red to test if FBO is writable
-            glEnable(GL_SCISSOR_TEST)
-            glScissor(0, 0, 50, 50)  # Bottom-left 50x50 pixels
-            glClearColor(1.0, 0.0, 0.0, 1.0)  # Red
-            glClear(GL_COLOR_BUFFER_BIT)
-            glDisable(GL_SCISSOR_TEST)
-            glClearColor(0.0, 0.0, 0.0, 1.0)  # Reset to black
-            print("[DEBUG] Attempted to clear 50x50 region to red after Multiverse")
-            self._fbo_write_test = True
-
         # Disable blending for overlay
         glDisable(GL_BLEND)
 
         # Draw overlay on top (contours, scan point, rings) - GPU rendering
         self._draw_overlay_gpu()
-
-        # DEBUG: Immediately after overlay read pixels to verify
-        if not hasattr(self, '_post_overlay_pixel_check'):
-            glFinish()
-            test_pixel = glReadPixels(100, 100, 1, 1, GL_RGB, GL_UNSIGNED_BYTE)
-            r, g, b = test_pixel[0], test_pixel[1], test_pixel[2]
-            print(f"[DEBUG] IMMEDIATELY after overlay at (100,100): RGB=({r},{g},{b})")
-            self._post_overlay_pixel_check = True
 
         # Verify FBO is still bound before reading
         current_fbo_before_read = glGetIntegerv(GL_FRAMEBUFFER_BINDING)
@@ -885,8 +855,6 @@ class QtMultiverseRenderer(QOpenGLWidget):
 
         if self._debug_frame_count % 100 == 0:
             print(f"[Qt OpenGL] Rendering frame {self._debug_frame_count} (thread: {threading.current_thread().name})")
-            print(f"[Qt OpenGL] Region state: use_region_map={self.use_region_map}, use_gpu_region={self.use_gpu_region}")
-            print(f"[Qt OpenGL] Camera frame: {self.camera_frame_data is not None}, Region map: {self.region_map_data is not None}")
             for i in range(min(4, len(channels_data))):
                 ch_data = channels_data[i]
                 audio = ch_data.get('audio', np.array([]))
