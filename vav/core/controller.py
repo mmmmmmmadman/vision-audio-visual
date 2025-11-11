@@ -689,11 +689,11 @@ class VAVController:
     def _update_cv_values(self):
         """Update CV values - 發送 SEQ 到 audio process，接收 CV 值用於 GUI"""
         if self.contour_cv_generator and self.audio_process:
-            # 發送 SEQ1/SEQ2/輪廓長度到獨立的 audio process (normalized 0-1)
+            # 發送 SEQ1/SEQ2/循環完成狀態到獨立的 audio process (normalized 0-1)
             seq1_normalized = self.contour_cv_generator.seq1_value / 10.0
             seq2_normalized = self.contour_cv_generator.seq2_value / 10.0
-            contour_length_normalized = self.contour_cv_generator.get_contour_length()
-            self.audio_process.send_cv_values(seq1_normalized, seq2_normalized, contour_length_normalized)
+            scan_loop_completed = self.contour_cv_generator.get_scan_loop_completed()
+            self.audio_process.send_cv_values(seq1_normalized, seq2_normalized, scan_loop_completed)
 
             # 從 audio process 接收 CV 值用於 GUI 顯示
             cv_from_audio = self.audio_process.get_cv_values()

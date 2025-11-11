@@ -34,7 +34,7 @@ def audio_process_worker(
     獨立 process 的 worker function
 
     Args:
-        cv_queue: 從 main process 接收 CV 值 (SEQ1, SEQ2, contour_length)
+        cv_queue: 從 main process 接收 CV 值 (SEQ1, SEQ2, scan_loop_completed)
         cv_output_queue: 回傳 CV 值給 GUI (6 channels: ENV1-4, SEQ1-2)
         control_queue: 接收控制訊息 (envelope decay 等)
         config: 音訊設定
@@ -107,7 +107,7 @@ def audio_process_worker(
     # SEQ1/SEQ2 從 queue 接收
     seq1_value = 0.0
     seq2_value = 0.0
-    contour_length = 0.0  # 輪廓長度
+    scan_loop_completed = False  # 掃描循環完成標記
 
     # Previous SEQ values for edge detection
     prev_seq1 = 0.0
@@ -115,16 +115,12 @@ def audio_process_worker(
     prev_x_greater = False
     prev_y_greater = False
 
-    # ENV4: 輪廓長度變化追蹤
-    prev_contour_length = 0.0
-    contour_length_change_threshold = 0.1  # 10% 變化觸發
-
     # Channel levels
     channel_levels = [1.0, 1.0, 1.0, 1.0]
 
     def audio_callback(indata: np.ndarray, frames: int) -> np.ndarray:
         """Audio callback - 在獨立 process 中執行"""
-        nonlocal cv_values, seq1_value, seq2_value, contour_length, prev_x_greater, prev_y_greater, prev_contour_length
+        nonlocal cv_values, seq1_value, seq2_value, scan_loop_completed, prev_x_greater, prev_y_greater
 
         # 處理控制訊息 (non-blocking)
         try:
@@ -181,16 +177,16 @@ def audio_process_worker(
             pass
 
         # 嘗試從 queue 讀取最新的 SEQ 值 (non-blocking)
-        # 現在接收 3 個值: seq1, seq2, contour_length
+        # 接收 3 個值: seq1, seq2, scan_loop_completed
         try:
             while not cv_queue.empty():
                 data = cv_queue.get_nowait()
                 if len(data) == 3:
-                    seq1_value, seq2_value, contour_length = data
+                    seq1_value, seq2_value, scan_loop_completed = data
                 else:
                     # 相容舊版 (只有 2 個值)
                     seq1_value, seq2_value = data
-                    contour_length = 0.0
+                    scan_loop_completed = False
         except:
             pass
 
@@ -212,13 +208,9 @@ def audio_process_worker(
             if not envelopes[2].is_active:
                 envelopes[2].trigger()
 
-        # ENV4: 輪廓長度變化觸發 (場景變化偵測)
-        if prev_contour_length > 0:
-            # 計算長度變化比例
-            length_change = abs(contour_length - prev_contour_length) / prev_contour_length
-            if length_change > contour_length_change_threshold:
-                envelopes[3].trigger()
-        prev_contour_length = max(contour_length, 1.0)  # 避免除以零
+        # ENV4: 掃描循環完成觸發
+        if scan_loop_completed:
+            envelopes[3].trigger()
 
         # Process CV generators (sample-accurate)
         for i in range(frames):
@@ -373,21 +365,21 @@ class AudioProcess:
         self.running = False
         print("[AudioProcess] Stopped")
 
-    def send_cv_values(self, seq1: float, seq2: float, contour_length: float = 0.0):
+    def send_cv_values(self, seq1: float, seq2: float, scan_loop_completed: bool = False):
         """
-        發送 SEQ1/SEQ2 值和輪廓長度到 audio process
+        發送 SEQ1/SEQ2 值和掃描循環完成標記到 audio process
 
         Args:
             seq1: SEQ1 value (0-1)
             seq2: SEQ2 value (0-1)
-            contour_length: 輪廓長度 (用於 ENV4 觸發)
+            scan_loop_completed: 掃描循環完成標記 (用於 ENV4 觸發)
         """
         if not self.running:
             return
 
         try:
             # Non-blocking put，避免阻塞 vision thread
-            self.cv_queue.put_nowait((seq1, seq2, contour_length))
+            self.cv_queue.put_nowait((seq1, seq2, scan_loop_completed))
         except:
             # Queue full，忽略
             pass

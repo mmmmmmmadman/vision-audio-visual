@@ -74,10 +74,11 @@ class ContourScanner:
         # 快取上次找到的所有輪廓，用於快速重新過濾
         self.cached_contours = []
 
-        # 輪廓長度 (用於 ENV4 觸發)
+        # 輪廓長度
         self.contour_length = 0.0
-        self.prev_contour_length_for_trigger = 0.0
-        self.contour_length_change_threshold = 0.1  # 10% 變化觸發
+
+        # ENV4: 掃描循環完成觸發
+        self.scan_loop_completed = False
 
 
     def detect_and_extract_contour(self, gray: np.ndarray):
@@ -239,8 +240,10 @@ class ContourScanner:
         self.scan_progress += progress_increment
 
         # 循環掃描
+        self.scan_loop_completed = False
         if self.scan_progress >= 1.0:
             self.scan_progress = 0.0
+            self.scan_loop_completed = True  # 標記循環完成
 
         # 計算當前掃描點索引
         num_points = len(self.contour_points)
@@ -318,24 +321,21 @@ class ContourScanner:
                 envelopes[2].trigger()
         self.prev_high_curvature = threshold_trigger
 
-        # ENV4觸發檢測: 輪廓長度變化
-        if self.prev_contour_length_for_trigger > 0:
-            length_change = abs(self.contour_length - self.prev_contour_length_for_trigger) / self.prev_contour_length_for_trigger
-            if length_change > self.contour_length_change_threshold:
-                # 輪廓長度變化超過閾值，觸發 ENV4
-                self.trigger_rings.append({
-                    'pos': (scan_x, scan_y),
-                    'radius': 15,
-                    'alpha': 1.0,
-                    'color': CV_COLORS_BGR['ENV4'],
-                    'decay_time': env_decay_times[3] if len(env_decay_times) > 3 else 1.0
-                })
-                self.last_trigger_positions['env4'] = (scan_x, scan_y, CV_COLORS_BGR['ENV4'])
+        # ENV4觸發檢測: 掃描循環完成
+        if self.scan_loop_completed:
+            # 掃描循環完成，觸發 ENV4
+            self.trigger_rings.append({
+                'pos': (scan_x, scan_y),
+                'radius': 15,
+                'alpha': 1.0,
+                'color': CV_COLORS_BGR['ENV4'],
+                'decay_time': env_decay_times[3] if len(env_decay_times) > 3 else 1.0
+            })
+            self.last_trigger_positions['env4'] = (scan_x, scan_y, CV_COLORS_BGR['ENV4'])
 
-                # 如果有 envelope 物件也呼叫 trigger
-                if envelopes and len(envelopes) > 3:
-                    envelopes[3].trigger()
-        self.prev_contour_length_for_trigger = max(self.contour_length, 1.0)
+            # 如果有 envelope 物件也呼叫 trigger
+            if envelopes and len(envelopes) > 3:
+                envelopes[3].trigger()
 
         # 更新envelope輸出值 0-10V
         if envelopes:
@@ -701,3 +701,7 @@ class ContourScanner:
         if max_length > 0:
             return min(self.contour_length / max_length, 1.0)
         return 0.0
+
+    def get_scan_loop_completed(self) -> bool:
+        """取得掃描循環是否完成"""
+        return self.scan_loop_completed
