@@ -596,7 +596,7 @@ class VAVController:
         # Generate region map using input_frame (SD or camera) if region rendering is enabled
         t0 = time.time()
         region_map = None
-        use_gpu_region = True  # Default to GPU region mode
+        use_gpu_region = False  # Default to no region
 
         # DEBUG: Log region rendering state every 100 frames
         if not hasattr(self, '_region_debug_counter'):
@@ -613,6 +613,7 @@ class VAVController:
                 region_map = None  # No CPU region map needed
             else:
                 # CPU region mode: calculate region map on CPU
+                use_gpu_region = False
                 if self.region_mode == 'brightness':
                     region_map = self.region_mapper.create_brightness_based_regions(input_frame)
                 elif self.region_mode == 'color':

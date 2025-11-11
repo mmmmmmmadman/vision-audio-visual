@@ -2,14 +2,35 @@
 
 ---
 
+## [2025-11-11] Region Map 開關失效問題修復
+
+### 問題修復
+
+**Region Map 無法關閉的 bug**
+- 使用者反應開關 Region Map checkbox 時畫面沒有變化
+- 經診斷發現 controller.py:599 預設值設為 True 導致 region map 無法關閉
+- 即使 use_region_rendering=False 仍會傳 camera_frame 給 renderer
+
+**修正內容**
+- controller.py:599 use_gpu_region 預設值改為 False
+- controller.py:616 CPU region mode 明確設為 False
+- 確保 region map 關閉時不會傳遞 region 相關資料給 renderer
+
+**測試確認**
+- Region Map ON 正常顯示分區效果
+- Region Map OFF 正常顯示全畫面混合效果
+- 開關切換即時生效
+
+---
+
 ## [2025-11-11] Region Map 診斷與除錯工具添加
 
 ### 問題診斷
 
-**Region Map 在 Multiverse 模式下視覺效果不明顯**
+**Region Map 開關失效問題調查**
 - 使用者反應開關 Region Map 時畫面沒有明顯變化
-- 經診斷確認 Region Map 功能本身正常運作
-- 問題在於四個 channels 同時啟用經過 blend 後視覺差異不明顯
+- 透過診斷工具確認 Region Map 功能本身正常運作
+- 發現問題根源在於預設值設定錯誤導致無法關閉
 
 ### 診斷工具添加
 
