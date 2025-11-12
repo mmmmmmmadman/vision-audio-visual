@@ -695,8 +695,9 @@ class VAVController:
         # Add info text
         t0 = time.time()
         height, width = rendered_bgr.shape[:2]
-        mode_names = ["Add", "Screen", "Diff", "Dodge"]
-        mode_name = mode_names[self.renderer_params['blend_mode']]
+        # Blend mode is now continuous 0.0-1.0
+        blend_value = self.renderer_params['blend_mode']
+        mode_name = f"Blend:{blend_value:.2f}"
         if NUMBA_AVAILABLE and isinstance(self.renderer, NumbaMultiverseRenderer):
             renderer_type = "Numba JIT"
         elif self.using_gpu and isinstance(self.renderer, QtMultiverseRenderer):
@@ -887,9 +888,9 @@ class VAVController:
         mode = "Multiverse" if enabled else "Simple"
         print(f"Rendering mode: {mode}")
 
-    def set_renderer_blend_mode(self, mode: int):
-        """Set Multiverse blend mode (0-3)"""
-        mode = int(np.clip(mode, 0, 3))
+    def set_renderer_blend_mode(self, mode: float):
+        """Set Multiverse blend mode (0.0-1.0 continuous)"""
+        mode = np.clip(mode, 0.0, 1.0)
         self.renderer_params['blend_mode'] = mode
         if self.renderer:
             self.renderer.set_blend_mode(mode)
@@ -907,6 +908,13 @@ class VAVController:
         self.renderer_params['base_hue'] = hue
         if self.renderer:
             self.renderer.set_base_hue(hue)
+
+    def set_color_scheme(self, scheme: float):
+        """Set color scheme (0.0-1.0 continuous blend between schemes)"""
+        scheme = np.clip(scheme, 0.0, 1.0)
+        self.renderer_params['color_scheme'] = scheme
+        if self.renderer:
+            self.renderer.set_color_scheme(scheme)
 
     def set_renderer_channel_curve(self, channel: int, curve: float):
         """Set curve for a specific channel (0-1)"""

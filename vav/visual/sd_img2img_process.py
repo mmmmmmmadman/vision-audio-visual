@@ -114,9 +114,9 @@ def _sd_worker_process(
             # 執行推理
             start_time = time.time()
 
-            # 轉換成 PIL Image
+            # 轉換成 PIL Image (use BILINEAR for speed)
             pil_image = Image.fromarray(input_frame[:, :, ::-1])  # BGR to RGB
-            pil_image = pil_image.resize((512, 512))
+            pil_image = pil_image.resize((512, 512), Image.Resampling.BILINEAR)
 
             # 生成
             result = pipe(
@@ -131,10 +131,10 @@ def _sd_worker_process(
             result_array = np.array(result)
             result_bgr = result_array[:, :, ::-1].copy()
 
-            # 放大到目標解析度
+            # 放大到目標解析度 (use BILINEAR for speed)
             result_resized = np.array(Image.fromarray(result_bgr).resize(
                 (output_width, output_height),
-                Image.Resampling.LANCZOS
+                Image.Resampling.BILINEAR
             ))
 
             gen_time = time.time() - start_time

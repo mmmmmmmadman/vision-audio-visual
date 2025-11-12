@@ -80,13 +80,14 @@ class QtMultiverseRenderer(QOpenGLWidget):
     uniform vec4 angles;
     uniform vec4 ratios;
     uniform vec4 enabled_mask;
-    uniform int blend_mode;
+    uniform float blend_mode;  // 0.0-1.0 continuous blend between modes
     uniform float brightness;
     uniform int use_region_map;
     uniform int use_gpu_region;  // 0=use region_tex, 1=calculate in shader
     uniform float base_hue;
     uniform vec3 envelope_offsets;  // env1-3 values (0.0-1.0)
     uniform float camera_mix;  // 0.0-1.0, blend strength for camera/SD input
+    uniform float color_scheme;  // 0.0-1.0 continuous blend between color schemes
 
     in vec2 v_texcoord;
     out vec4 fragColor;
@@ -100,7 +101,6 @@ class QtMultiverseRenderer(QOpenGLWidget):
     }
 
     vec3 getChannelColor(int ch) {
-        // 方案1 (Hue Rotation): 三層維持 120° 互補色，ENV1 控制 base hue 旋轉
         float hue = base_hue;
         float saturation = 1.0;
         float value = 1.0;
@@ -108,29 +108,55 @@ class QtMultiverseRenderer(QOpenGLWidget):
         // ENV1 控制整體色相旋轉 (0-360°)
         float hue_rotation = envelope_offsets.x;
 
+        // 計算三種方案的顏色
+        vec3 scheme1_hue, scheme2_hue, scheme3_hue;
+
+        // 方案1: 90度四色系統
         if (ch == 0) {
-            // Channel 1: Layer 1 (base hue + ENV1 rotation)
-            hue = fract(base_hue + hue_rotation);
-            saturation = 1.0;
-            value = 1.0;
+            scheme1_hue = vec3(fract(base_hue + hue_rotation), 1.0, 1.0);
         } else if (ch == 1) {
-            // Channel 2: Layer 2 (+120° offset, ENV2 控制飽和度)
-            hue = fract(base_hue + hue_rotation + 0.333);  // +120° = +1/3
-            saturation = 0.5 + 0.5 * envelope_offsets.y;   // ENV2 控制飽和度 (0.5-1.0)
-            value = 1.0;
+            scheme1_hue = vec3(fract(base_hue + hue_rotation + 0.25), 0.5 + 0.5 * envelope_offsets.y, 1.0);
         } else if (ch == 2) {
-            // Channel 3: Layer 3 (+240° offset, ENV3 控制飽和度)
-            hue = fract(base_hue + hue_rotation + 0.667);  // +240° = +2/3
-            saturation = 0.5 + 0.5 * envelope_offsets.z;   // ENV3 控制飽和度 (0.5-1.0)
-            value = 1.0;
+            scheme1_hue = vec3(fract(base_hue + hue_rotation + 0.5), 0.5 + 0.5 * envelope_offsets.z, 1.0);
         } else {
-            // Channel 4: 額外通道（如有需要）
-            hue = fract(base_hue + hue_rotation);
-            saturation = 0.8;
-            value = 0.9;
+            scheme1_hue = vec3(fract(base_hue + hue_rotation + 0.75), 1.0, 1.0);
         }
 
-        return hsv2rgb(vec3(hue, saturation, value));
+        // 方案2: 三色+對比
+        if (ch == 0) {
+            scheme2_hue = vec3(fract(base_hue + hue_rotation), 1.0, 1.0);
+        } else if (ch == 1) {
+            scheme2_hue = vec3(fract(base_hue + hue_rotation + 0.333), 0.5 + 0.5 * envelope_offsets.y, 1.0);
+        } else if (ch == 2) {
+            scheme2_hue = vec3(fract(base_hue + hue_rotation + 0.667), 0.5 + 0.5 * envelope_offsets.z, 1.0);
+        } else {
+            scheme2_hue = vec3(fract(base_hue + hue_rotation + 0.5), 1.0, 1.0);
+        }
+
+        // 方案3: 三色+中間色
+        if (ch == 0) {
+            scheme3_hue = vec3(fract(base_hue + hue_rotation), 1.0, 1.0);
+        } else if (ch == 1) {
+            scheme3_hue = vec3(fract(base_hue + hue_rotation + 0.333), 0.5 + 0.5 * envelope_offsets.y, 1.0);
+        } else if (ch == 2) {
+            scheme3_hue = vec3(fract(base_hue + hue_rotation + 0.667), 0.5 + 0.5 * envelope_offsets.z, 1.0);
+        } else {
+            scheme3_hue = vec3(fract(base_hue + hue_rotation + 0.167), 1.0, 1.0);
+        }
+
+        // 根據 color_scheme 值在三個方案之間混合
+        vec3 hsv_result;
+        if (color_scheme < 0.5) {
+            // 0.0-0.5: 在方案1和方案2之間混合
+            float t = color_scheme * 2.0;  // 0.0-1.0
+            hsv_result = mix(scheme1_hue, scheme2_hue, t);
+        } else {
+            // 0.5-1.0: 在方案2和方案3之間混合
+            float t = (color_scheme - 0.5) * 2.0;  // 0.0-1.0
+            hsv_result = mix(scheme2_hue, scheme3_hue, t);
+        }
+
+        return hsv2rgb(hsv_result);
     }
 
     vec2 rotate(vec2 pos, float angle) {
@@ -143,28 +169,42 @@ class QtMultiverseRenderer(QOpenGLWidget):
         );
     }
 
-    vec4 blendColors(vec4 c1, vec4 c2, int mode) {
-        if (mode == 0) {
-            return min(vec4(1.0), c1 + c2);
-        } else if (mode == 1) {
-            return vec4(1.0) - (vec4(1.0) - c1) * (vec4(1.0) - c2);
-        } else if (mode == 2) {
-            return vec4(abs(c1.rgb - c2.rgb), max(c1.a, c2.a));
-        } else if (mode == 3) {
-            vec3 result;
-            for (int i = 0; i < 3; i++) {
-                if (c2[i] >= 0.999) {
-                    result[i] = 1.0;
-                } else if (c1[i] <= 0.001) {
-                    result[i] = 0.0;
-                } else {
-                    result[i] = min(1.0, c1[i] / (1.0 - c2[i]));
-                }
+    vec4 blendColors(vec4 c1, vec4 c2, float mode) {
+        // 計算四種混合模式的結果
+        vec3 add_result = min(vec3(1.0), c1.rgb + c2.rgb);
+
+        vec3 screen_result = vec3(1.0) - (vec3(1.0) - c1.rgb) * (vec3(1.0) - c2.rgb);
+
+        vec3 diff_result = abs(c1.rgb - c2.rgb);
+
+        vec3 dodge_result = vec3(0.0);
+        for (int i = 0; i < 3; i++) {
+            if (c2[i] >= 0.999) {
+                dodge_result[i] = 1.0;
+            } else if (c1[i] <= 0.001) {
+                dodge_result[i] = 0.0;
+            } else {
+                dodge_result[i] = min(1.0, c1[i] / (1.0 - c2[i]));
             }
-            return vec4(result, max(c1.a, c2.a));
-        } else {
-            return min(vec4(1.0), c1 + c2);
         }
+
+        // 根據 mode 值在四種模式之間混合
+        // 0.0-0.33: Add -> Screen
+        // 0.33-0.66: Screen -> Difference
+        // 0.66-1.0: Difference -> Dodge
+        vec3 result;
+        if (mode < 0.33) {
+            float t = mode / 0.33;
+            result = mix(add_result, screen_result, t);
+        } else if (mode < 0.66) {
+            float t = (mode - 0.33) / 0.33;
+            result = mix(screen_result, diff_result, t);
+        } else {
+            float t = (mode - 0.66) / 0.34;
+            result = mix(diff_result, dodge_result, t);
+        }
+
+        return vec4(result, max(c1.a, c2.a));
     }
 
     void main() {
@@ -199,6 +239,11 @@ class QtMultiverseRenderer(QOpenGLWidget):
 
         for (int ch = 0; ch < 4; ch++) {
             if (enabled_mask[ch] < 0.5) continue;
+
+            // Apply region filtering: skip channels not in this region
+            if (use_region_map > 0 && ch != currentRegion) {
+                continue;  // Skip this channel entirely, don't blend with black
+            }
 
             vec2 uv = v_texcoord;
             float curve = curves[ch];
@@ -242,61 +287,43 @@ class QtMultiverseRenderer(QOpenGLWidget):
             // waveValue is in ±10V range, only use positive values (0-10V maps to 0.0-1.0)
             float normalized = clamp(waveValue * 0.1 * intensities[ch], 0.0, 1.0);
 
-            if (normalized > 0.01) {
-                vec3 rgb = getChannelColor(ch);
-                vec4 channelColor = vec4(rgb * normalized, normalized);
+            // Apply minimum brightness of 10% when voltage is low
+            float displayValue = max(normalized, 0.1);
 
-                // Apply region filtering: zero out if not in this channel's region
-                if (use_region_map > 0 && ch != currentRegion) {
-                    channelColor = vec4(0.0);
-                }
+            vec3 rgb = getChannelColor(ch);
+            vec4 channelColor = vec4(rgb * displayValue, displayValue);
 
-                // Only blend non-zero colors
-                if (channelColor.a > 0.001) {
-                    if (firstChannel) {
-                        result = channelColor;
-                        firstChannel = false;
-                    } else {
-                        result = blendColors(result, channelColor, blend_mode);
-                    }
+            // Blend channels together
+            if (channelColor.a > 0.001) {
+                if (firstChannel) {
+                    result = channelColor;
+                    firstChannel = false;
+                } else {
+                    result = blendColors(result, channelColor, blend_mode);
                 }
             }
         }
 
-        // Apply brightness
-        result.rgb *= brightness;
-
         // GPU Blend: Blend with camera/SD input if camera_mix > 0
+        // This is ESSENTIAL for region map mode where each pixel only has 1 channel
         if (camera_mix > 0.001) {
             // Sample camera blend texture (flip Y to match OpenCV coordinate system)
             vec3 camera_color = texture(camera_blend_tex, vec2(v_texcoord.x, 1.0 - v_texcoord.y)).rgb;
 
-            // Apply camera_mix as alpha
-            vec3 blend_color = camera_color * camera_mix;
+            // Create camera "channel" - scale color by camera_mix to control intensity
+            vec4 cameraChannel = vec4(camera_color * camera_mix, camera_mix);
 
-            // Apply blend mode (same logic as CPU blend in controller.py:653-664)
-            vec3 blended;
-            if (blend_mode == 0) {  // Add
-                blended = clamp(result.rgb + blend_color, 0.0, 1.0);
-            } else if (blend_mode == 1) {  // Screen
-                blended = vec3(1.0) - (vec3(1.0) - result.rgb) * (vec3(1.0) - blend_color);
-            } else if (blend_mode == 2) {  // Difference
-                blended = abs(result.rgb - blend_color);
-            } else if (blend_mode == 3) {  // Color Dodge
-                blended = vec3(0.0);
-                for (int i = 0; i < 3; i++) {
-                    if (blend_color[i] < 0.999) {
-                        blended[i] = clamp(result.rgb[i] / max(0.001, 1.0 - blend_color[i]), 0.0, 1.0);
-                    } else {
-                        blended[i] = 1.0;
-                    }
-                }
+            // Blend camera with multiverse result using blend mode
+            if (result.a > 0.001) {
+                result = blendColors(result, cameraChannel, blend_mode);
             } else {
-                blended = result.rgb;
+                // If no multiverse channels, just use camera
+                result = cameraChannel;
             }
-
-            result.rgb = blended;
         }
+
+        // Apply brightness after all blending
+        result.rgb *= brightness;
 
         fragColor = vec4(result.rgb, 1.0);
     }
@@ -341,11 +368,12 @@ class QtMultiverseRenderer(QOpenGLWidget):
         self.overlay_projection_matrix = None
 
         # Rendering parameters
-        self.blend_mode = 0
+        self.blend_mode = 0.0  # 0.0-1.0 continuous blend
         self.brightness = 2.5
         self.base_hue = 0.0  # Base hue in range 0.0-1.0
         self.envelope_offsets = np.array([0.0, 0.0, 0.0], dtype=np.float32)  # env1-3 values (0.0-1.0)
         self.camera_mix = 0.0  # GPU blend strength (0.0-1.0)
+        self.color_scheme = 0.5  # 0.0-1.0 continuous (0.5 = Tri+Contrast)
 
         # Audio data
         self.audio_data = np.zeros((4, width), dtype=np.float32)
@@ -666,7 +694,7 @@ class QtMultiverseRenderer(QOpenGLWidget):
                         1, self.ratios)
             glUniform4fv(glGetUniformLocation(self.shader_program, b"enabled_mask"),
                         1, self.enabled_mask)
-            glUniform1i(glGetUniformLocation(self.shader_program, b"blend_mode"),
+            glUniform1f(glGetUniformLocation(self.shader_program, b"blend_mode"),
                        self.blend_mode)
             glUniform1f(glGetUniformLocation(self.shader_program, b"brightness"),
                        self.brightness)
@@ -680,6 +708,8 @@ class QtMultiverseRenderer(QOpenGLWidget):
                        self.envelope_offsets[0], self.envelope_offsets[1], self.envelope_offsets[2])
             glUniform1f(glGetUniformLocation(self.shader_program, b"camera_mix"),
                        self.camera_mix)
+            glUniform1f(glGetUniformLocation(self.shader_program, b"color_scheme"),
+                       self.color_scheme)
 
             # Bind textures and draw Multiverse
             glActiveTexture(GL_TEXTURE0)
@@ -1009,9 +1039,9 @@ class QtMultiverseRenderer(QOpenGLWidget):
         if self._perf_frame_count % 100 == 0:
             print(f"[PERF] GUI thread render: total={t_total:.2f}ms (mutex={t_mutex:.2f}ms, render={t_render:.2f}ms, store={t_store:.2f}ms)")
 
-    def set_blend_mode(self, mode: int):
-        """Set blend mode (0-3)"""
-        self.blend_mode = max(0, min(3, mode))
+    def set_blend_mode(self, mode: float):
+        """Set blend mode (0.0-1.0 continuous)"""
+        self.blend_mode = max(0.0, min(1.0, mode))
 
     def set_base_hue(self, hue: float):
         """Set base hue (0.0-1.0 range)"""
@@ -1026,6 +1056,10 @@ class QtMultiverseRenderer(QOpenGLWidget):
     def set_brightness(self, brightness: float):
         """Set brightness (0-4)"""
         self.brightness = max(0.0, min(4.0, brightness))
+
+    def set_color_scheme(self, scheme: float):
+        """Set color scheme (0.0-1.0 continuous)"""
+        self.color_scheme = max(0.0, min(1.0, scheme))
 
     def _create_ortho_matrix(self, left, right, bottom, top, near, far):
         """Create orthographic projection matrix (OpenGL column-major)"""

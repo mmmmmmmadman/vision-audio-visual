@@ -316,17 +316,33 @@ class CompactMainWindow(QMainWindow):
         self.multiverse_checkbox.setFixedHeight(16)  # Match slider height for consistent spacing
         self.multiverse_checkbox.setChecked(True)  # Default enabled
         self.multiverse_checkbox.stateChanged.connect(self._on_multiverse_toggle)
-        grid.addWidget(self.multiverse_checkbox, row2, COL2, 1, 2)
+        grid.addWidget(self.multiverse_checkbox, row2, COL2)
+
+        # Color scheme fader (no label, continuous blend)
+        self.color_scheme_slider = QSlider(Qt.Orientation.Horizontal)
+        self.color_scheme_slider.setFixedHeight(16)
+        self.color_scheme_slider.setFixedWidth(120)
+        self._apply_slider_style(self.color_scheme_slider, COLOR_COL2)
+        self.color_scheme_slider.setMinimum(0)
+        self.color_scheme_slider.setMaximum(100)
+        self.color_scheme_slider.setValue(50)  # Default to middle (Tri+Contrast)
+        self.color_scheme_slider.valueChanged.connect(self._on_color_scheme_changed)
+        self._make_slider_learnable(self.color_scheme_slider, "color_scheme", self._on_color_scheme_changed)
+        grid.addWidget(self.color_scheme_slider, row2, COL2 + 1, 1, 2)
         row2 += 1
 
-        # Blend mode
+        # Blend mode fader
         grid.addWidget(QLabel("Blend"), row2, COL2)
-        self.blend_mode_combo = QComboBox()
-        self.blend_mode_combo.addItems(["Add", "Scrn", "Diff", "Dodg"])
-        self.blend_mode_combo.setFixedHeight(16)  # Match slider height for consistent spacing
-        self.blend_mode_combo.setFixedWidth(120)
-        self.blend_mode_combo.currentIndexChanged.connect(self._on_blend_mode_changed)
-        grid.addWidget(self.blend_mode_combo, row2, COL2 + 1, 1, 2)
+        self.blend_mode_slider = QSlider(Qt.Orientation.Horizontal)
+        self.blend_mode_slider.setFixedHeight(16)
+        self.blend_mode_slider.setFixedWidth(120)
+        self._apply_slider_style(self.blend_mode_slider, COLOR_COL2)
+        self.blend_mode_slider.setMinimum(0)
+        self.blend_mode_slider.setMaximum(100)
+        self.blend_mode_slider.setValue(0)  # Default to Add
+        self.blend_mode_slider.valueChanged.connect(self._on_blend_mode_changed)
+        self._make_slider_learnable(self.blend_mode_slider, "blend_mode", self._on_blend_mode_changed)
+        grid.addWidget(self.blend_mode_slider, row2, COL2 + 1, 1, 2)
         row2 += 1
 
         # Brightness
@@ -353,7 +369,7 @@ class CompactMainWindow(QMainWindow):
         self.base_hue_slider.setFixedWidth(120)
         self._apply_slider_style(self.base_hue_slider, COLOR_COL2)
         self.base_hue_slider.setMinimum(0)
-        self.base_hue_slider.setMaximum(360)
+        self.base_hue_slider.setMaximum(333)
         self.base_hue_slider.setValue(0)  # Default red
         self.base_hue_slider.valueChanged.connect(self._on_base_hue_changed)
         self._make_slider_learnable(self.base_hue_slider, "base_hue", self._on_base_hue_changed)
@@ -370,7 +386,7 @@ class CompactMainWindow(QMainWindow):
         self.camera_mix_slider.setFixedWidth(120)
         self._apply_slider_style(self.camera_mix_slider, COLOR_COL2)
         self.camera_mix_slider.setMinimum(0)
-        self.camera_mix_slider.setMaximum(100)
+        self.camera_mix_slider.setMaximum(30)  # Max 0.3
         self.camera_mix_slider.setValue(0)  # Default: pure multiverse
         self.camera_mix_slider.valueChanged.connect(self._on_camera_mix_changed)
         self._make_slider_learnable(self.camera_mix_slider, "camera_mix", self._on_camera_mix_changed)
@@ -1382,10 +1398,15 @@ class CompactMainWindow(QMainWindow):
         mode = "Multiverse" if enabled else "Simple"
         self.status_label.setText(f"Rendering: {mode}")
 
-    def _on_blend_mode_changed(self, index: int):
-        self.controller.set_renderer_blend_mode(index)
-        mode_names = ["Add", "Screen", "Diff", "Dodge"]
-        self.status_label.setText(f"Blend: {mode_names[index]}")
+    def _on_blend_mode_changed(self, value: int):
+        # Convert 0-100 to 0.0-1.0 for continuous blend
+        blend_value = value / 100.0
+        self.controller.set_renderer_blend_mode(blend_value)
+
+    def _on_color_scheme_changed(self, value: int):
+        # Convert 0-100 to 0.0-1.0 for continuous color scheme blend
+        scheme_value = value / 100.0
+        self.controller.set_color_scheme(scheme_value)
 
     def _on_brightness_changed(self, value: int):
         brightness = value / 100.0
@@ -1393,7 +1414,7 @@ class CompactMainWindow(QMainWindow):
         self.controller.set_renderer_brightness(brightness)
 
     def _on_base_hue_changed(self, value: int):
-        hue = value / 360.0  # Convert 0-360 to 0.0-1.0
+        hue = value / 333.0  # Convert 0-333 to 0.0-1.0
         self.base_hue_label.setText(f"{value}")
         self.controller.set_renderer_base_hue(hue)
 
@@ -1437,8 +1458,8 @@ class CompactMainWindow(QMainWindow):
 
     def _on_camera_mix_changed(self, value: int):
         """Camera mix changed"""
-        camera_mix = value / 100.0
-        self.camera_mix_label.setText(f"{camera_mix:.1f}")
+        camera_mix = value / 100.0  # 0-30 slider -> 0.0-0.3
+        self.camera_mix_label.setText(f"{camera_mix:.2f}")
         self.controller.set_renderer_camera_mix(camera_mix)
 
     # Ellen Ripley event handlers
