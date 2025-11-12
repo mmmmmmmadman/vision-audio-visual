@@ -6,14 +6,14 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QSlider, QGroupBox, QGridLayout,
     QComboBox, QCheckBox, QTextEdit, QLineEdit, QMenu,
+    QSizePolicy,
 )
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtGui import QImage, QPixmap
 import numpy as np
 import cv2
 
 from .device_dialog import DeviceSelectionDialog
-from .anchor_xy_pad import AnchorXYPad
 from .cv_meter_window import CVMeterWindow
 from ..core.controller import VAVController
 
@@ -65,6 +65,13 @@ class CompactMainWindow(QMainWindow):
 
         # CV Meter Window (independent)
         self.cv_meter_window = CVMeterWindow()
+
+        # Setup MIDI Learn for Anchor XY Pad in CV Meter Window
+        self.cv_meter_window.setup_midi_learn(self.midi_learn)
+
+        # Connect Anchor XY Pad position changes to controller
+        self.cv_meter_window.anchor_xy_pad.position_changed.connect(self._on_anchor_xy_changed)
+
         self.cv_meter_window.show()
 
         # Status bar
@@ -235,8 +242,8 @@ class CompactMainWindow(QMainWindow):
         # ===== COLUMN 1: CV Source =====
         row1 = 0
 
-        # ENV Global Decay (exponential: 0.1~1s, 1~5s)
-        grid.addWidget(QLabel("ENV Global Decay"), row1, COL1)
+        # ENV Decay (exponential: 0.1~1s, 1~5s)
+        grid.addWidget(QLabel("ENV Decay"), row1, COL1)
         self.env_global_slider = QSlider(Qt.Orientation.Horizontal)
         self.env_global_slider.setFixedHeight(16)
         self.env_global_slider.setFixedWidth(140)
@@ -307,6 +314,68 @@ class CompactMainWindow(QMainWindow):
             grid.addWidget(mix_label, row1, COL1 + 2)
             self.mixer_sliders.append((mix_slider, mix_label))
             row1 += 1
+
+        # Countdown Timer (倒數計時器)
+        # Label, Display, Input, Button all in one row
+        grid.addWidget(QLabel("Timer"), row1, COL1)
+
+        # Timer layout: Display + Input + Button in COL1+1
+        timer_layout = QHBoxLayout()
+        timer_layout.setSpacing(5)
+        timer_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Timer display (倒數顯示)
+        self.timer_display = QLabel("00:00")
+        self.timer_display.setStyleSheet("font-size: 14px; font-weight: bold;")
+        self.timer_display.setFixedWidth(45)
+        self.timer_display.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        timer_layout.addWidget(self.timer_display)
+
+        # Time input (分:秒)
+        self.timer_minutes = QLineEdit("05")
+        self.timer_minutes.setFixedWidth(30)
+        self.timer_minutes.setMaxLength(2)
+        self.timer_minutes.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        timer_layout.addWidget(self.timer_minutes)
+        timer_layout.addWidget(QLabel(":"))
+        self.timer_seconds = QLineEdit("00")
+        self.timer_seconds.setFixedWidth(30)
+        self.timer_seconds.setMaxLength(2)
+        self.timer_seconds.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        timer_layout.addWidget(self.timer_seconds)
+
+        # Start/Stop button
+        self.timer_button = QPushButton("Start")
+        self.timer_button.setFixedWidth(50)
+        self.timer_button.setFixedHeight(20)
+        self.timer_button.clicked.connect(self._on_timer_toggle)
+        timer_layout.addWidget(self.timer_button)
+
+        timer_layout.addStretch()
+
+        timer_widget = QWidget()
+        timer_widget.setLayout(timer_layout)
+        grid.addWidget(timer_widget, row1, COL1 + 1, 1, 2)  # Span 2 columns
+        row1 += 1
+
+        # Timer state
+        self.timer_running = False
+        self.timer_remaining = 0  # seconds
+        self.timer_total = 0  # seconds
+        self.timer_start_time = 0  # timestamp
+
+        # Timer animation - store initial values
+        self.timer_initial_color_scheme = 0
+        self.timer_initial_blend_mode = 0
+        self.timer_initial_base_hue = 0
+        self.timer_target_color_scheme = 100
+        self.timer_target_blend_mode = 100
+        self.timer_target_base_hue = 333
+
+        # Timer update (using QTimer)
+        self.timer_updater = QTimer()
+        self.timer_updater.timeout.connect(self._update_timer)
+        self.timer_updater.setInterval(100)  # Update every 100ms
 
         # ===== COLUMN 2: Multiverse Main =====
         row2 = 0
@@ -396,6 +465,23 @@ class CompactMainWindow(QMainWindow):
         grid.addWidget(self.camera_mix_label, row2, COL2 + 2)
         row2 += 1
 
+        # Global Ratio (控制全部 4 個通道)
+        grid.addWidget(QLabel("Ratio"), row2, COL2)
+        self.global_ratio_slider = QSlider(Qt.Orientation.Horizontal)
+        self.global_ratio_slider.setFixedHeight(16)
+        self.global_ratio_slider.setFixedWidth(120)
+        self._apply_slider_style(self.global_ratio_slider, COLOR_COL2)
+        self.global_ratio_slider.setMinimum(1)  # 0.01
+        self.global_ratio_slider.setMaximum(1000)  # 10.0
+        self.global_ratio_slider.setValue(1)  # 0.01 default
+        self.global_ratio_slider.valueChanged.connect(self._on_global_ratio_changed)
+        self._make_slider_learnable(self.global_ratio_slider, "global_ratio", self._on_global_ratio_changed)
+        grid.addWidget(self.global_ratio_slider, row2, COL2 + 1)
+        self.global_ratio_label = QLabel("0.01")
+        self.global_ratio_label.setFixedWidth(25)
+        grid.addWidget(self.global_ratio_label, row2, COL2 + 2)
+        row2 += 1
+
         # Region Rendering + SD img2img (same row)
         region_sd_layout = QHBoxLayout()
         region_sd_layout.setSpacing(10)
@@ -420,12 +506,12 @@ class CompactMainWindow(QMainWindow):
 
         # SD Prompt (multiline text area, no label)
         self.sd_prompt_edit = QTextEdit()
-        # Height = 1 row (16px slider) + 1 spacing (10px) + 1 row (16px) = 42px for clean 2-row span
-        self.sd_prompt_edit.setFixedHeight(42)
+        self.sd_prompt_edit.setFixedHeight(40)  # 增加高度可看到兩行字
+        self.sd_prompt_edit.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.sd_prompt_edit.setPlainText("artistic style, abstract, monochrome ink painting, high quality")
         self.sd_prompt_edit.textChanged.connect(self._on_sd_prompt_changed)
-        grid.addWidget(self.sd_prompt_edit, row2, COL2, 2, 3)  # Span 2 rows, 3 columns
-        row2 += 2
+        grid.addWidget(self.sd_prompt_edit, row2, COL2, 1, 3)  # Span 1 row, 3 columns
+        row2 += 1
 
         # SD Steps
         grid.addWidget(QLabel("Steps"), row2, COL2)
@@ -434,7 +520,7 @@ class CompactMainWindow(QMainWindow):
         self.sd_steps_slider.setFixedWidth(120)
         self._apply_slider_style(self.sd_steps_slider, COLOR_COL2)
         self.sd_steps_slider.setMinimum(1)
-        self.sd_steps_slider.setMaximum(20)
+        self.sd_steps_slider.setMaximum(4)  # 最高到 4
         self.sd_steps_slider.setValue(2)
         self.sd_steps_slider.valueChanged.connect(self._on_sd_steps_changed)
         self._make_slider_learnable(self.sd_steps_slider, "sd_steps", self._on_sd_steps_changed)
@@ -468,7 +554,7 @@ class CompactMainWindow(QMainWindow):
         self.sd_guidance_slider.setFixedWidth(120)
         self._apply_slider_style(self.sd_guidance_slider, COLOR_COL2)
         self.sd_guidance_slider.setMinimum(10)
-        self.sd_guidance_slider.setMaximum(150)
+        self.sd_guidance_slider.setMaximum(50)  # 最高到 5.0
         self.sd_guidance_slider.setValue(10)
         self.sd_guidance_slider.valueChanged.connect(self._on_sd_guidance_changed)
         self._make_slider_learnable(self.sd_guidance_slider, "sd_guidance", self._on_sd_guidance_changed)
@@ -492,12 +578,11 @@ class CompactMainWindow(QMainWindow):
         row3 = 0
         self.channel_curve_sliders = []
         self.channel_angle_sliders = []
-        self.channel_ratio_sliders = []
         default_angles = [180, 225, 270, 315]
 
         # Create all 4 channels with vertical layout (Curve, Angle, Ratio in separate rows)
         for i in range(4):
-            # Curve
+            # Curve (現在是 modulation amount 0-100%)
             grid.addWidget(QLabel(f"Ch{i+1} Curve"), row3, COL3)
             curve_slider = QSlider(Qt.Orientation.Horizontal)
             curve_slider.setFixedHeight(16)
@@ -505,7 +590,7 @@ class CompactMainWindow(QMainWindow):
             self._apply_slider_style(curve_slider, COLOR_COL3)
             curve_slider.setMinimum(0)
             curve_slider.setMaximum(100)
-            curve_slider.setValue(0)
+            curve_slider.setValue(100)  # 預設 100% modulation
             curve_slider.valueChanged.connect(lambda val, idx=i: self._on_channel_curve_changed(idx, val))
             self._make_slider_learnable(curve_slider, f"ch{i+1}_curve", lambda val, idx=i: self._on_channel_curve_changed(idx, val))
             grid.addWidget(curve_slider, row3, COL3 + 1)
@@ -515,7 +600,7 @@ class CompactMainWindow(QMainWindow):
             self.channel_curve_sliders.append((curve_slider, curve_label))
             row3 += 1
 
-            # Angle
+            # Angle (現在是 modulation amount 0-360 映射到 0-100%)
             grid.addWidget(QLabel(f"Ch{i+1} Angle"), row3, COL3)
             angle_slider = QSlider(Qt.Orientation.Horizontal)
             angle_slider.setFixedHeight(16)
@@ -523,7 +608,7 @@ class CompactMainWindow(QMainWindow):
             self._apply_slider_style(angle_slider, COLOR_COL3)
             angle_slider.setMinimum(0)
             angle_slider.setMaximum(360)
-            angle_slider.setValue(default_angles[i])
+            angle_slider.setValue(360)  # 預設 360 = 100% modulation
             angle_slider.valueChanged.connect(lambda val, idx=i: self._on_channel_angle_changed(idx, val))
             self._make_slider_learnable(angle_slider, f"ch{i+1}_angle", lambda val, idx=i: self._on_channel_angle_changed(idx, val))
             grid.addWidget(angle_slider, row3, COL3 + 1)
@@ -531,24 +616,6 @@ class CompactMainWindow(QMainWindow):
             angle_label.setFixedWidth(30)
             grid.addWidget(angle_label, row3, COL3 + 2)
             self.channel_angle_sliders.append((angle_slider, angle_label))
-            row3 += 1
-
-            # Ratio
-            grid.addWidget(QLabel(f"Ch{i+1} Ratio"), row3, COL3)
-            ratio_slider = QSlider(Qt.Orientation.Horizontal)
-            ratio_slider.setFixedHeight(16)
-            ratio_slider.setFixedWidth(120)
-            self._apply_slider_style(ratio_slider, COLOR_COL3)
-            ratio_slider.setMinimum(5)  # 0.05
-            ratio_slider.setMaximum(1000)  # 10.0
-            ratio_slider.setValue(5)  # 0.05 default
-            ratio_slider.valueChanged.connect(lambda val, idx=i: self._on_channel_ratio_changed(idx, val))
-            self._make_slider_learnable(ratio_slider, f"ch{i+1}_ratio", lambda val, idx=i: self._on_channel_ratio_changed(idx, val))
-            grid.addWidget(ratio_slider, row3, COL3 + 1)
-            ratio_label = QLabel("1.0")
-            ratio_label.setFixedWidth(25)
-            grid.addWidget(ratio_label, row3, COL3 + 2)
-            self.channel_ratio_sliders.append((ratio_slider, ratio_label))
             row3 += 1
 
         # ===== COLUMN 4: Ellen Ripley Delay+Grain =====
@@ -843,51 +910,6 @@ class CompactMainWindow(QMainWindow):
         chaos_row2_widget.setLayout(chaos_row2_layout)
         grid.addWidget(chaos_row2_widget, row5, COL5, 1, 3)
         row5 += 1
-
-        # Anchor XY Pad (no label)
-        self.anchor_xy_pad = AnchorXYPad()
-        self.anchor_xy_pad.position_changed.connect(self._on_anchor_xy_changed)
-        grid.addWidget(self.anchor_xy_pad, row5, COL4, 3, 3)  # Span 3 rows, 3 columns
-
-        # Register Anchor X/Y for MIDI Learn
-        def anchor_x_midi_callback(value):
-            self.anchor_xy_pad.set_position(value, self.anchor_xy_pad.y_pct, emit_signal=True)
-
-        def anchor_y_midi_callback(value):
-            # Invert Y: MIDI 0-100 → GUI 100-0
-            inverted_y = 100.0 - value
-            self.anchor_xy_pad.set_position(self.anchor_xy_pad.x_pct, inverted_y, emit_signal=True)
-
-        self.midi_learn.register_parameter("anchor_x", anchor_x_midi_callback, 0.0, 100.0)
-        self.midi_learn.register_parameter("anchor_y", anchor_y_midi_callback, 0.0, 100.0)
-
-        # Add context menu for XY Pad
-        def show_xy_context_menu(pos):
-            menu = QMenu()
-            learn_x_action = menu.addAction("MIDI Learn X")
-            learn_y_action = menu.addAction("MIDI Learn Y")
-            menu.addSeparator()
-            clear_x_action = menu.addAction("Clear X Mapping")
-            clear_y_action = menu.addAction("Clear Y Mapping")
-            menu.addSeparator()
-            clear_all_action = menu.addAction("Clear All MIDI Mappings")
-
-            action = menu.exec(self.anchor_xy_pad.mapToGlobal(pos))
-
-            if action == learn_x_action:
-                self.midi_learn.enter_learn_mode("anchor_x")
-            elif action == learn_y_action:
-                self.midi_learn.enter_learn_mode("anchor_y")
-            elif action == clear_x_action:
-                self.midi_learn.clear_mapping("anchor_x")
-            elif action == clear_y_action:
-                self.midi_learn.clear_mapping("anchor_y")
-            elif action == clear_all_action:
-                self.midi_learn.clear_all_mappings()
-
-        self.anchor_xy_pad.customContextMenuRequested.connect(show_xy_context_menu)
-
-        row5 += 3
 
     def _build_cv_column(self) -> QWidget:
         """Build CV controls column"""
@@ -1243,7 +1265,7 @@ class CompactMainWindow(QMainWindow):
         _, label = self.range_slider
         label.setText(f"{value}%")
         # Update XY Pad to show ROI circle
-        self.anchor_xy_pad.set_range(float(value))
+        self.cv_meter_window.anchor_xy_pad.set_range(float(value))
 
     def _on_threshold_changed(self, value: int):
         """Edge detection threshold (0-255)"""
@@ -1449,12 +1471,13 @@ class CompactMainWindow(QMainWindow):
         mapped_angle = float(value) - 180.0
         self.controller.set_renderer_channel_angle(channel, mapped_angle)
 
-    def _on_channel_ratio_changed(self, channel: int, value: int):
-        """Channel ratio changed"""
+    def _on_global_ratio_changed(self, value: int):
+        """Global ratio changed - update all 4 channels"""
         ratio = value / 100.0
-        _, label = self.channel_ratio_sliders[channel]
-        label.setText(f"{ratio:.1f}")
-        self.controller.set_renderer_channel_ratio(channel, ratio)
+        self.global_ratio_label.setText(f"{ratio:.2f}")
+        # Update all 4 channels
+        for i in range(4):
+            self.controller.set_renderer_channel_ratio(i, ratio)
 
     def _on_camera_mix_changed(self, value: int):
         """Camera mix changed"""
@@ -1612,6 +1635,119 @@ class CompactMainWindow(QMainWindow):
     def _on_param(self, param_name: str, channel: int, value: float):
         self.param_updated.emit(param_name, channel, value)
 
+    # Timer event handlers
+    def _on_timer_toggle(self):
+        """Toggle timer start/stop"""
+        if not self.timer_running:
+            # Start timer
+            try:
+                minutes = int(self.timer_minutes.text())
+                seconds = int(self.timer_seconds.text())
+                total_seconds = minutes * 60 + seconds
+
+                if total_seconds <= 0:
+                    return
+
+                self.timer_total = total_seconds
+                self.timer_remaining = total_seconds
+                self.timer_running = True
+                self.timer_button.setText("Stop")
+
+                # Disable input
+                self.timer_minutes.setEnabled(False)
+                self.timer_seconds.setEnabled(False)
+
+                # Store initial values and set to 0
+                self.timer_initial_color_scheme = self.color_scheme_slider.value()
+                self.timer_initial_blend_mode = self.blend_mode_slider.value()
+                self.timer_initial_base_hue = self.base_hue_slider.value()
+
+                # Reset to 0
+                self.color_scheme_slider.setValue(0)
+                self.blend_mode_slider.setValue(0)
+                self.base_hue_slider.setValue(0)
+
+                # Start QTimer
+                import time
+                self.timer_start_time = time.time()
+                self.timer_updater.start()
+
+            except ValueError:
+                pass
+        else:
+            # Stop timer
+            self._stop_timer()
+
+    def _stop_timer(self):
+        """Stop and reset timer"""
+        self.timer_running = False
+        self.timer_updater.stop()
+        self.timer_button.setText("Start")
+
+        # Enable input
+        self.timer_minutes.setEnabled(True)
+        self.timer_seconds.setEnabled(True)
+
+        # Reset display
+        self.timer_display.setText("00:00")
+
+    def _update_timer(self):
+        """Update timer display (called every 100ms)"""
+        if not self.timer_running:
+            return
+
+        import time
+        elapsed = time.time() - self.timer_start_time
+        remaining = max(0, self.timer_total - elapsed)
+
+        if remaining <= 0:
+            # Timer finished - set to max values
+            self.color_scheme_slider.setValue(self.timer_target_color_scheme)
+            self.blend_mode_slider.setValue(self.timer_target_blend_mode)
+            self.base_hue_slider.setValue(self.timer_target_base_hue)
+
+            self._stop_timer()
+            self.timer_display.setText("00:00")
+            self.timer_display.setStyleSheet("font-size: 16px; font-weight: bold; color: red;")
+            return
+
+        # Calculate progress (0 to 1)
+        progress = (self.timer_total - remaining) / self.timer_total
+
+        # Update parameters linearly from 0 to max
+        color_scheme_value = int(progress * self.timer_target_color_scheme)
+        blend_mode_value = int(progress * self.timer_target_blend_mode)
+        base_hue_value = int(progress * self.timer_target_base_hue)
+
+        # Update sliders (block signals to avoid feedback)
+        self.color_scheme_slider.blockSignals(True)
+        self.blend_mode_slider.blockSignals(True)
+        self.base_hue_slider.blockSignals(True)
+
+        self.color_scheme_slider.setValue(color_scheme_value)
+        self.blend_mode_slider.setValue(blend_mode_value)
+        self.base_hue_slider.setValue(base_hue_value)
+
+        self.color_scheme_slider.blockSignals(False)
+        self.blend_mode_slider.blockSignals(False)
+        self.base_hue_slider.blockSignals(False)
+
+        # Manually trigger updates to controller
+        self.controller.set_color_scheme(color_scheme_value / 100.0)
+        self.controller.set_renderer_blend_mode(blend_mode_value / 100.0)
+        self.controller.set_renderer_base_hue(base_hue_value / 333.0)
+
+        # Update display
+        minutes = int(remaining // 60)
+        seconds = int(remaining % 60)
+        self.timer_display.setText(f"{minutes:02d}:{seconds:02d}")
+
+        # Change color when less than 1 minute
+        if remaining < 60:
+            self.timer_display.setStyleSheet("font-size: 16px; font-weight: bold; color: orange;")
+        else:
+            self.timer_display.setStyleSheet("font-size: 16px; font-weight: bold;")
+
     # Qt slots
     def _update_frame_display(self, frame: np.ndarray):
         # Frame is already rendered (Simple or Multiverse mode) by controller
@@ -1631,23 +1767,19 @@ class CompactMainWindow(QMainWindow):
         pass
 
     def _update_param_display(self, param_name: str, channel: int, value: float):
-        """Update GUI slider when parameter is changed by seq"""
+        """Update GUI label to show current actual value (LFO modulated)
+
+        Slider 不更新因為它現在控制 modulation amount
+        只更新 label 顯示當前實際 angle/curve 值
+        """
         if param_name == "curve":
-            # Curve: value 0-5, slider 0-500 (100x)
-            slider, label = self.channel_curve_sliders[channel]
-            slider.blockSignals(True)  # Avoid feedback loop
-            slider.setValue(int(value * 100))
+            # 顯示當前實際 curve 值 (0-1)
+            _, label = self.channel_curve_sliders[channel]
             label.setText(f"{value:.2f}")
-            slider.blockSignals(False)
         elif param_name == "angle":
-            # Angle: value 0-720, slider 0-360
-            slider, label = self.channel_angle_sliders[channel]
-            slider.blockSignals(True)
-            # Map 0-720 to 0-360 slider
-            slider_value = int(value) % 360
-            slider.setValue(slider_value)
-            label.setText(f"{int(value)}")
-            slider.blockSignals(False)
+            # 顯示當前實際 angle 值 (-180 到 +180)
+            _, label = self.channel_angle_sliders[channel]
+            label.setText(f"{int(value)}°")
 
     def closeEvent(self, event):
         """Close all windows and stop controller"""

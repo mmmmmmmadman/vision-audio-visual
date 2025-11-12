@@ -77,6 +77,16 @@ class ContourScanner:
         # ENV4: 掃描循環完成觸發
         self.scan_loop_completed = False
 
+        # LFO Pattern 系統
+        self.lfo_phase = 0.0  # 當前 LFO 相位 (0 到 1)
+        self.lfo_variants = np.zeros(8, dtype=np.float32)  # 8 個變種訊號輸出
+        self.modulation_amounts = np.ones(8, dtype=np.float32)  # 8 個 modulation amount (0-1) 預設全滿
+
+        # 8 個 pattern 預計算的波形 (每個 pattern 100 個點)
+        self.lfo_patterns = []  # List of 8 arrays, each with 100 samples
+        self.pattern_resolution = 100  # Pattern 解析度
+        self._generate_lfo_patterns()
+
 
     def detect_and_extract_contour(self, gray: np.ndarray):
         """偵測邊緣並提取最主要的輪廓線
@@ -112,6 +122,10 @@ class ContourScanner:
 
         # 正常執行邊緣檢測（anchor/range改變也會觸發）
         params_changed = anchor_moved or range_changed
+
+        # 如果參數沒變且場景也沒變 直接返回使用舊輪廓
+        if not params_changed and not scene_changed and len(self.contour_points) > 0:
+            return
 
         # 更新追蹤狀態
         self.prev_anchor_x_pct = self.anchor_x_pct
@@ -344,6 +358,9 @@ class ContourScanner:
                 self.env3_value = envelopes[2].value * 10.0
             if len(envelopes) > 3:
                 self.env4_value = envelopes[3].value * 10.0
+
+        # 更新 Sine LFO 與變種訊號
+        self._update_lfo()
 
     def _calculate_curvature(self, index: int) -> float:
         """計算當前點的輪廓曲率
@@ -665,13 +682,19 @@ class ContourScanner:
     def set_anchor_position(self, x_pct: float, y_pct: float):
         self.anchor_x_pct = np.clip(x_pct, 0, 100)
         self.anchor_y_pct = np.clip(y_pct, 0, 100)
+        # 重新生成 chaos offsets 並重置 LFO 相位
+        self._regenerate_lfo()
 
     def set_range(self, range_pct: float):
         self.range_pct = np.clip(range_pct, 1, 120)
+        # 重新生成 chaos offsets 並重置 LFO 相位
+        self._regenerate_lfo()
 
     def set_scan_time(self, scan_time: float):
         """設定掃描時間（秒）"""
         self.scan_time = np.clip(scan_time, 0.1, 60.0)
+        # 重新生成 chaos offsets 並重置 LFO 相位
+        self._regenerate_lfo()
 
     def get_contour_length(self) -> float:
         """取得當前輪廓長度（正規化為 0-1）"""
@@ -684,3 +707,107 @@ class ContourScanner:
     def get_scan_loop_completed(self) -> bool:
         """取得掃描循環是否完成"""
         return self.scan_loop_completed
+
+    def _generate_modulation_amounts(self) -> np.ndarray:
+        """生成 8 個隨機 modulation amount 範圍 0.5 到 1.0"""
+        return np.random.uniform(0.5, 1.0, 8).astype(np.float32)
+
+    def _generate_lfo_patterns(self):
+        """生成 8 個隨機 LFO pattern
+
+        每個 pattern 可以是:
+        - 圓滑 (smooth): sine, triangle, smooth random
+        - 跳躍 (stepped): square, random steps, multi-step
+        """
+        self.lfo_patterns = []
+
+        for i in range(8):
+            # 隨機選擇 pattern 類型
+            pattern_type = np.random.choice(['sine', 'triangle', 'smooth_random',
+                                            'square', 'random_steps', 'multi_step'])
+
+            if pattern_type == 'sine':
+                # 圓滑 sine wave
+                phase = np.linspace(0, 2 * np.pi, self.pattern_resolution)
+                pattern = np.sin(phase)
+
+            elif pattern_type == 'triangle':
+                # 圓滑三角波
+                phase = np.linspace(0, 1, self.pattern_resolution)
+                pattern = 2 * np.abs(2 * (phase - np.floor(phase + 0.5))) - 1
+
+            elif pattern_type == 'smooth_random':
+                # 圓滑隨機波形 (使用低通濾波)
+                random_points = np.random.uniform(-1, 1, 20)
+                # 插值到 100 個點
+                x = np.linspace(0, 19, 20)
+                x_new = np.linspace(0, 19, self.pattern_resolution)
+                pattern = np.interp(x_new, x, random_points)
+
+            elif pattern_type == 'square':
+                # 跳躍方波
+                phase = np.linspace(0, 1, self.pattern_resolution)
+                pattern = np.where(phase < 0.5, 1.0, -1.0)
+
+            elif pattern_type == 'random_steps':
+                # 隨機階梯 (2-4 個階梯)
+                num_steps = np.random.randint(2, 5)
+                step_values = np.random.uniform(-1, 1, num_steps)
+                pattern = np.repeat(step_values, self.pattern_resolution // num_steps + 1)[:self.pattern_resolution]
+
+            elif pattern_type == 'multi_step':
+                # 多階梯 (8 個階梯)
+                step_values = np.random.uniform(-1, 1, 8)
+                pattern = np.repeat(step_values, self.pattern_resolution // 8 + 1)[:self.pattern_resolution]
+
+            # 添加些微隨機偏移 (±10%)
+            offset = np.random.uniform(-0.1, 0.1)
+            pattern = pattern * (1.0 + offset)
+
+            self.lfo_patterns.append(pattern.astype(np.float32))
+
+    def _regenerate_lfo(self):
+        """重新生成 LFO patterns, modulation amounts 並重置 LFO 相位"""
+        self._generate_lfo_patterns()
+        self.modulation_amounts = self._generate_modulation_amounts()
+        self.lfo_phase = 0.0
+
+    def _update_lfo(self):
+        """更新 LFO Pattern 與 8 個變種訊號
+
+        基於當前掃描進度計算 LFO 相位並從預計算的 pattern 取值
+        - LFO 週期 = scan_time × 10 (慢 10 倍)
+        - scan_progress (0-1) 對應 LFO 的 1/10 週期
+        - 從預計算的 pattern array 中取值
+        """
+        # 防禦性檢查：確保 patterns 已經生成
+        if len(self.lfo_patterns) != 8:
+            self._generate_lfo_patterns()
+            return
+
+        # 計算 LFO 相位 (0 到 1，但掃描 10 次才完成一個週期)
+        self.lfo_phase = (self.scan_progress / 10.0) % 1.0
+
+        # 從預計算的 pattern 中取值
+        pattern_index = int(self.lfo_phase * (self.pattern_resolution - 1))
+
+        for i in range(8):
+            self.lfo_variants[i] = self.lfo_patterns[i][pattern_index]
+
+    def get_lfo_variants(self) -> np.ndarray:
+        """取得 8 個 LFO 變種訊號
+
+        Returns:
+            8-element array: 變種訊號 0-3 用於 angle, 4-7 用於 curve
+            範圍約 -1.1 到 +1.1
+        """
+        return self.lfo_variants.copy()
+
+    def get_modulation_amounts(self) -> np.ndarray:
+        """取得 8 個 modulation amount
+
+        Returns:
+            8-element array: modulation amount 0-3 用於 angle, 4-7 用於 curve
+            範圍 0.5 到 1.0
+        """
+        return self.modulation_amounts.copy()

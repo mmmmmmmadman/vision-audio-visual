@@ -2,6 +2,65 @@
 
 ---
 
+## [2025-11-12] GUI 佈局優化與錯誤修正
+
+### GUI 改進
+
+**1. SD 區塊垂直間距修正**
+- 修正 SD Prompt QTextEdit 影響 grid 行高的問題
+- 為 SD Prompt 設定 `QSizePolicy.Fixed` 避免影響下方 sliders 間距
+- SD 區塊 sliders (Steps, Strength, Guidance, Gen Interval) 現在與 Multiverse sliders 使用相同垂直間距
+- 檔案：`vav/gui/compact_main_window.py:503`
+
+**2. Anchor XY Pad 移動到 CV Meters 視窗**
+- 將 Anchor XY Pad 從主控制視窗移至獨立的 CV Meters 視窗
+- CV Meters 視窗高度從 210 增加到 370 (增加 160px)
+- 完整保留 MIDI Learn 功能：
+  - Anchor X/Y 參數註冊
+  - Y 軸反轉邏輯 (MIDI 0-100 → GUI 100-0)
+  - 右鍵選單支援 MIDI Learn X/Y、清除映射
+- `position_changed` signal 正常連接到 controller
+- Range slider 更新 XY Pad 的 ROI 圓圈顯示
+- 檔案：
+  - `vav/gui/cv_meter_window.py`: 新增 `setup_midi_learn()` 方法
+  - `vav/gui/compact_main_window.py`: 移除主視窗 XY Pad，連接到 CV Meter Window
+
+### Bug 修正
+
+**LFO Pattern IndexError 修正**
+- 問題：`_update_lfo()` 在初始化過程中可能存取未生成的 patterns
+- 錯誤：`IndexError: list index out of range` at `contour_scanner.py:790`
+- 解決：在 `_update_lfo()` 加入防禦性檢查
+- 檢查 `len(self.lfo_patterns) != 8` 時立即重新生成 patterns
+- 避免初始化過程的競態條件
+- 檔案：`vav/cv_generator/contour_scanner.py:783-786`
+
+### 技術細節
+
+**QSizePolicy 修正**
+```python
+self.sd_prompt_edit.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+```
+- 防止 40px 高的 TextEdit 影響 QGridLayout 的行高分配
+- 確保所有 slider 行使用統一的垂直間距 (10px)
+
+**CV Meter Window MIDI 整合**
+```python
+def setup_midi_learn(self, midi_learn):
+    self.midi_learn = midi_learn
+    # 註冊 anchor_x, anchor_y 參數
+    # 設定 context menu 與 callbacks
+```
+
+**LFO 防禦性檢查**
+```python
+if len(self.lfo_patterns) != 8:
+    self._generate_lfo_patterns()
+    return
+```
+
+---
+
 ## [2025-11-12] 色彩方案與混合模式連續化改進
 
 ### 新增功能

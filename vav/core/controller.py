@@ -70,6 +70,15 @@ class VAVController:
             'camera_mix': 0.0,  # 0.0=pure multiverse, 1.0=pure camera, blend in between
         }
 
+        # LFO modulation 參數
+        self.base_angles = [0.0, 45.0, 90.0, 135.0]  # 基礎 angle 值
+        self.base_curves = [0.0, 0.0, 0.0, 0.0]  # 基礎 curve 值
+        self.angle_mod_amounts = [1.0, 1.0, 1.0, 1.0]  # Angle modulation 幅度 (0-1) 預設全滿
+        self.curve_mod_amounts = [1.0, 1.0, 1.0, 1.0]  # Curve modulation 幅度 (0-1) 預設全滿
+        self.current_angles = [0.0, 45.0, 90.0, 135.0]  # 當前實際 angle 值 (用於 GUI 顯示)
+        self.current_curves = [0.0, 0.0, 0.0, 0.0]  # 當前實際 curve 值 (用於 GUI 顯示)
+        self.gui_update_counter = 0  # GUI 更新計數器 每 3 幀更新一次標籤
+
         # Region-based rendering
         self.use_region_rendering = False  # Enable/disable region-based rendering
         self.region_mapper: Optional[ContentAwareRegionMapper] = None
@@ -407,11 +416,11 @@ class VAVController:
             gray = cv2.cvtColor(cv_input_frame, cv2.COLOR_BGR2GRAY)
             t_gray = (time.time() - t0) * 1000
 
-            # Detect and extract contour (每30幀執行一次，避免影響audio thread)
+            # Detect and extract contour (每10幀執行一次，內部有 early return 優化)
             t0 = time.time()
             if not hasattr(self, '_contour_frame_skip'):
                 self._contour_frame_skip = 0
-            self._contour_frame_skip = (self._contour_frame_skip + 1) % 30
+            self._contour_frame_skip = (self._contour_frame_skip + 1) % 10
             if self._contour_frame_skip == 0:
                 self.contour_cv_generator.detect_and_extract_contour(gray)
             t_contour = (time.time() - t0) * 1000
@@ -740,9 +749,77 @@ class VAVController:
                 self.cv_values[4] = seq1_normalized  # SEQ1
                 self.cv_values[5] = seq2_normalized  # SEQ2
 
+            # 更新 LFO modulation
+            self._update_lfo_modulation()
+
             # Trigger CV callback for GUI updates
             if self.cv_callback:
                 self.cv_callback(self.cv_values)
+
+    def _update_lfo_modulation(self):
+        """更新 LFO modulation 並計算最終 angle/curve 值"""
+        if not self.contour_cv_generator:
+            return
+
+        # 讀取 8 個 LFO 變種訊號
+        lfo_variants = self.contour_cv_generator.get_lfo_variants()
+
+        # 讀取 8 個隨機 modulation amounts (從 ContourScanner)
+        random_mod_amounts = self.contour_cv_generator.get_modulation_amounts()
+
+        # 計算 4 個通道的最終 angle 值
+        for i in range(4):
+            # LFO 變種 0-3 用於 angle
+            lfo_signal = lfo_variants[i]  # 範圍約 -1.1 到 +1.1
+            # 組合隨機值和 GUI fader 值 (相乘)
+            random_amount = random_mod_amounts[i]  # 0.5-1.0 (從 ContourScanner)
+            user_amount = self.angle_mod_amounts[i]  # 0-1 (從 GUI fader)
+            mod_amount = random_amount * user_amount  # 最終 modulation amount
+            base_angle = self.base_angles[i]  # -180 到 +180
+
+            # 計算 modulation 偏移量 (±180 度範圍)
+            angle_modulation = lfo_signal * mod_amount * 180.0
+
+            # 最終 angle 值
+            final_angle = base_angle + angle_modulation
+            # 限制範圍 -180 到 +180
+            final_angle = np.clip(final_angle, -180.0, 180.0)
+
+            self.current_angles[i] = final_angle
+            self.renderer_params['channel_angles'][i] = final_angle
+
+        # 計算 4 個通道的最終 curve 值
+        for i in range(4):
+            # LFO 變種 4-7 用於 curve
+            lfo_signal = lfo_variants[i + 4]  # 範圍約 -1.1 到 +1.1
+            # 組合隨機值和 GUI fader 值 (相乘)
+            random_amount = random_mod_amounts[i + 4]  # 0.5-1.0 (從 ContourScanner)
+            user_amount = self.curve_mod_amounts[i]  # 0-1 (從 GUI fader)
+            mod_amount = random_amount * user_amount  # 最終 modulation amount
+            base_curve = self.base_curves[i]  # 0 到 1
+
+            # 將 LFO 訊號轉換到 0-1 範圍
+            curve_normalized = (lfo_signal + 1.1) / 2.2  # -1.1~+1.1 -> 0~1
+
+            # 計算 modulation 偏移量
+            curve_modulation = curve_normalized * mod_amount
+
+            # 最終 curve 值
+            final_curve = base_curve + curve_modulation
+            # 限制範圍 0 到 1
+            final_curve = np.clip(final_curve, 0.0, 1.0)
+
+            self.current_curves[i] = final_curve
+            self.renderer_params['channel_curves'][i] = final_curve
+
+        # 每 3 幀更新一次 GUI 標籤 (降低 GUI 更新頻率)
+        self.gui_update_counter += 1
+        if self.gui_update_counter >= 3:
+            self.gui_update_counter = 0
+            if self.param_callback:
+                for i in range(4):
+                    self.param_callback('angle', i, self.current_angles[i])
+                    self.param_callback('curve', i, self.current_curves[i])
 
     # Contour CV controls (replacing cable analysis)
     def set_anchor_position(self, x_pct: float, y_pct: float):
@@ -917,16 +994,39 @@ class VAVController:
             self.renderer.set_color_scheme(scheme)
 
     def set_renderer_channel_curve(self, channel: int, curve: float):
-        """Set curve for a specific channel (0-1)"""
+        """Set curve modulation amount for a specific channel (0-1)
+
+        現在這個方法設定 modulation amount 而非絕對值
+        最終 curve 值 = base_curve + (LFO × mod_amount)
+        """
         if 0 <= channel < 4:
-            curve = np.clip(curve, 0.0, 1.0)
-            self.renderer_params['channel_curves'][channel] = curve
+            mod_amount = np.clip(curve, 0.0, 1.0)
+            self.curve_mod_amounts[channel] = mod_amount
 
     def set_renderer_channel_angle(self, channel: int, angle: float):
-        """Set rotation angle for a specific channel (-180 to 180)"""
+        """Set angle modulation amount for a specific channel (0-180 mapped to 0-1)
+
+        現在這個方法設定 modulation amount 而非絕對值
+        GUI 傳入 0-360 範圍 這裡轉換為 0-1 的 modulation amount
+        最終 angle 值 = base_angle + (LFO × mod_amount × 180)
+        """
+        if 0 <= channel < 4:
+            # 將 GUI 的 0-360 範圍映射到 0-1 的 modulation amount
+            # angle 輸入範圍假設是 0-360 (從 GUI slider)
+            mod_amount = np.clip(angle / 360.0, 0.0, 1.0)
+            self.angle_mod_amounts[channel] = mod_amount
+
+    def set_base_curve(self, channel: int, curve: float):
+        """設定基礎 curve 值 (0-1)"""
+        if 0 <= channel < 4:
+            curve = np.clip(curve, 0.0, 1.0)
+            self.base_curves[channel] = curve
+
+    def set_base_angle(self, channel: int, angle: float):
+        """設定基礎 angle 值 (-180 to 180)"""
         if 0 <= channel < 4:
             angle = np.clip(angle, -180.0, 180.0)
-            self.renderer_params['channel_angles'][channel] = angle
+            self.base_angles[channel] = angle
 
     def set_renderer_channel_intensity(self, channel: int, intensity: float):
         """Set intensity for a specific channel (0-1.5)"""
