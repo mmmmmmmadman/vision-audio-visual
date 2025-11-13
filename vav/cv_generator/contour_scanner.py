@@ -68,6 +68,7 @@ class ContourScanner:
         self.prev_y_greater = False  # 上一幀 Y > X 的狀態
         self.curvature_threshold = 0.3  # 曲率觸發閾值
         self.prev_high_curvature = False  # 上一幀高曲率狀態
+        self.prev_speed_weight = 1.0  # 上一幀的速度權重 (用於偵測加減速)
 
         # 視覺化
         self.current_scan_pos = None  # 當前掃描位置 (x, y)
@@ -93,6 +94,12 @@ class ContourScanner:
 
         # ENV4: 掃描循環完成觸發
         self.scan_loop_completed = False
+
+        # 變速掃描系統
+        self.curvature_values = []  # 每個點的曲率值
+        self.speed_weights = []  # 每個點的速度權重 (0.5x-2x)
+        self.time_allocations = []  # 每個點分配的時間比例
+        self.cumulative_time = []  # 累積時間比例 (用於查找當前點)
 
         # LFO Pattern 系統
         self.lfo_phase = 0.0  # 當前 LFO 相位 (0 到 1)
@@ -243,6 +250,9 @@ class ContourScanner:
         # 計算輪廓長度 (用於 ENV4 觸發)
         self.contour_length = float(len(self.contour_points))
 
+        # 計算變速掃描參數
+        self._calculate_variable_speed_params()
+
         return edges
 
     def update_scan(self, dt: float, width: int, height: int, envelopes: list = None,
@@ -275,22 +285,52 @@ class ContourScanner:
 
         # 計算當前掃描點索引
         num_points = len(self.contour_points)
-        self.current_scan_index = int(self.scan_progress * num_points)
-        self.current_scan_index = min(self.current_scan_index, num_points - 1)
+
+        # 使用變速掃描：根據累積時間查找當前點
+        if len(self.cumulative_time) > 0:
+            # 二分搜尋找到對應的點索引
+            self.current_scan_index = 0
+            for i in range(len(self.cumulative_time) - 1):
+                if self.cumulative_time[i] <= self.scan_progress < self.cumulative_time[i + 1]:
+                    self.current_scan_index = i
+                    break
+            else:
+                # 如果沒找到 使用最後一個點
+                self.current_scan_index = num_points - 1
+        else:
+            # 降級到等速掃描
+            self.current_scan_index = int(self.scan_progress * num_points)
+            self.current_scan_index = min(self.current_scan_index, num_points - 1)
 
         # 取得當前掃描點
         scan_x, scan_y = self.contour_points[self.current_scan_index]
         self.current_scan_pos = (scan_x, scan_y)
 
         # 計算 SEQ1/SEQ2 輸出0-10V
-        # SEQ1: (X + Y) / 2 (平均值)
-        # SEQ2: |X - Y| (差值絕對值)
+        # SEQ1: X 座標到 Anchor 的距離
+        # SEQ2: Y 座標到 Anchor 的距離
         x_normalized = scan_x / width
         y_normalized = scan_y / height
-        seq1_normalized = (x_normalized + y_normalized) / 2.0  # 平均值
-        seq2_normalized = abs(x_normalized - y_normalized)     # 差值絕對值
-        self.seq1_value = seq1_normalized * 10.0
-        self.seq2_value = seq2_normalized * 10.0
+
+        # 計算 Anchor 正規化座標
+        anchor_x_normalized = self.anchor_x_pct / 100.0
+        anchor_y_normalized = self.anchor_y_pct / 100.0
+
+        # 計算距離 (絕對值)
+        seq1_normalized = abs(x_normalized - anchor_x_normalized)
+        seq2_normalized = abs(y_normalized - anchor_y_normalized)
+
+        # Range 控制輸出放大倍數 (指數映射)
+        # Range 1% -> 8x, Range 120% -> 2x
+        # 使用指數映射讓放大倍數快速降低
+        # 正規化 range_pct 到 0-1
+        range_normalized = (self.range_pct - 1.0) / 119.0
+        # 反向指數曲線: 2 + 6 * (1 - t)^2
+        gain = 2.0 + (6.0 * ((1.0 - range_normalized) ** 2))
+
+        # 應用放大並限制在 0-10V
+        self.seq1_value = min(seq1_normalized * gain * 10.0, 10.0)
+        self.seq2_value = min(seq2_normalized * gain * 10.0, 10.0)
 
         # 保存正規化的 X Y 座標 (用於 envelope 觸發)
         self.x_normalized = x_normalized
@@ -318,10 +358,10 @@ class ContourScanner:
         self.env3_triggered = False
         self.env4_triggered = False
 
-        # ENV1觸發檢測: X > Y邊緣觸發 (使用原始 x, y 座標)
-        x_greater = x_normalized > y_normalized
-        if x_greater and not self.prev_x_greater:
-            # 從X≤Y變成X>Y 觸發ENV1 (檢查 retrigger 保護)
+        # ENV1觸發檢測: X 距離 Anchor > Y 距離 Anchor (邊緣觸發)
+        x_dist_greater = seq1_normalized > seq2_normalized
+        if x_dist_greater and not self.prev_x_greater:
+            # 從 X距離≤Y距離 變成 X距離>Y距離 觸發ENV1 (檢查 retrigger 保護)
             if not self.env1_decay_active:
                 self.env1_triggered = True
                 self.env1_decay_active = True
@@ -336,12 +376,12 @@ class ContourScanner:
                     'decay_time': decay_time
                 })
                 self.last_trigger_positions['env1'] = (scan_x, scan_y, CV_COLORS_BGR['ENV1'])
-        self.prev_x_greater = x_greater
+        self.prev_x_greater = x_dist_greater
 
-        # ENV2觸發檢測: Y > X邊緣觸發 (使用原始 x, y 座標)
-        y_greater = y_normalized > x_normalized
-        if y_greater and not self.prev_y_greater:
-            # 從Y≤X變成Y>X 觸發ENV2 (檢查 retrigger 保護)
+        # ENV2觸發檢測: Y 距離 Anchor > X 距離 Anchor (邊緣觸發)
+        y_dist_greater = seq2_normalized > seq1_normalized
+        if y_dist_greater and not self.prev_y_greater:
+            # 從 Y距離≤X距離 變成 Y距離>X距離 觸發ENV2 (檢查 retrigger 保護)
             if not self.env2_decay_active:
                 self.env2_triggered = True
                 self.env2_decay_active = True
@@ -356,44 +396,53 @@ class ContourScanner:
                     'decay_time': decay_time
                 })
                 self.last_trigger_positions['env2'] = (scan_x, scan_y, CV_COLORS_BGR['ENV2'])
-        self.prev_y_greater = y_greater
+        self.prev_y_greater = y_dist_greater
 
-        # ENV3觸發檢測: 當 X 或 Y 任一超過 0.5 時觸發
-        threshold_trigger = x_normalized > 0.5 or y_normalized > 0.5
-        if threshold_trigger and not self.prev_high_curvature:
-            # 從低於閾值變成超過閾值 觸發ENV3 (檢查 retrigger 保護)
-            if not self.env3_decay_active:
-                self.env3_triggered = True
-                self.env3_decay_active = True
-                decay_time = env_decay_times[2] if len(env_decay_times) > 2 else 1.0
-                self.env_decay_counters[2] = decay_time
-                # 創建視覺觸發光圈
-                self.trigger_rings.append({
-                    'pos': (scan_x, scan_y),
-                    'radius': 15,
-                    'alpha': 1.0,
-                    'color': CV_COLORS_BGR['ENV3'],
-                    'decay_time': decay_time
-                })
-                self.last_trigger_positions['env3'] = (scan_x, scan_y, CV_COLORS_BGR['ENV3'])
-        self.prev_high_curvature = threshold_trigger
+        # ENV3觸發檢測: 加速瞬間觸發
+        # 取得當前點的速度權重
+        current_speed_weight = 1.0
+        if len(self.speed_weights) > 0 and self.current_scan_index < len(self.speed_weights):
+            current_speed_weight = self.speed_weights[self.current_scan_index]
 
-        # ENV4觸發檢測: 掃描循環完成
-        if self.scan_loop_completed:
-            # 掃描循環完成，觸發 ENV4 (檢查 retrigger 保護)
-            if not self.env4_decay_active:
-                self.env4_triggered = True
-                self.env4_decay_active = True
-                decay_time = env_decay_times[3] if len(env_decay_times) > 3 else 1.0
-                self.env_decay_counters[3] = decay_time
-                self.trigger_rings.append({
-                    'pos': (scan_x, scan_y),
-                    'radius': 15,
-                    'alpha': 1.0,
-                    'color': CV_COLORS_BGR['ENV4'],
-                    'decay_time': decay_time
-                })
-                self.last_trigger_positions['env4'] = (scan_x, scan_y, CV_COLORS_BGR['ENV4'])
+        # 偵測加速: 速度權重降低 (權重低 = 速度快)
+        # 設定閾值避免微小變化觸發
+        speed_threshold = 0.3
+        is_accelerating = (self.prev_speed_weight - current_speed_weight) > speed_threshold
+
+        if is_accelerating and not self.env3_decay_active:
+            self.env3_triggered = True
+            self.env3_decay_active = True
+            decay_time = env_decay_times[2] if len(env_decay_times) > 2 else 1.0
+            self.env_decay_counters[2] = decay_time
+            self.trigger_rings.append({
+                'pos': (scan_x, scan_y),
+                'radius': 15,
+                'alpha': 1.0,
+                'color': CV_COLORS_BGR['ENV3'],
+                'decay_time': decay_time
+            })
+            self.last_trigger_positions['env3'] = (scan_x, scan_y, CV_COLORS_BGR['ENV3'])
+
+        # ENV4觸發檢測: 減速瞬間觸發
+        # 偵測減速: 速度權重增加 (權重高 = 速度慢)
+        is_decelerating = (current_speed_weight - self.prev_speed_weight) > speed_threshold
+
+        if is_decelerating and not self.env4_decay_active:
+            self.env4_triggered = True
+            self.env4_decay_active = True
+            decay_time = env_decay_times[3] if len(env_decay_times) > 3 else 1.0
+            self.env_decay_counters[3] = decay_time
+            self.trigger_rings.append({
+                'pos': (scan_x, scan_y),
+                'radius': 15,
+                'alpha': 1.0,
+                'color': CV_COLORS_BGR['ENV4'],
+                'decay_time': decay_time
+            })
+            self.last_trigger_positions['env4'] = (scan_x, scan_y, CV_COLORS_BGR['ENV4'])
+
+        # 更新上一幀的速度權重
+        self.prev_speed_weight = current_speed_weight
 
         # 更新 Sine LFO 與變種訊號
         self._update_lfo()
@@ -443,6 +492,54 @@ class ContourScanner:
         curvature = angle / np.pi
 
         return curvature
+
+    def _calculate_variable_speed_params(self):
+        """計算變速掃描參數
+
+        1. 計算每個點的曲率
+        2. 根據曲率分配速度權重 (彎道 0.5x, 直線 2x) 瞬間切換
+        3. 重新分配時間確保總時間符合 scan_time
+        """
+        if len(self.contour_points) < 5:
+            self.curvature_values = []
+            self.speed_weights = []
+            self.time_allocations = []
+            self.cumulative_time = []
+            return
+
+        num_points = len(self.contour_points)
+
+        # 1. 計算每個點的曲率
+        self.curvature_values = []
+        for i in range(num_points):
+            curvature = self._calculate_curvature(i)
+            self.curvature_values.append(curvature)
+
+        # 2. 根據曲率分配速度權重 (瞬間加速減速)
+        # 曲率高 (彎道) -> 速度慢 0.5x -> 權重高 2.0
+        # 曲率低 (直線) -> 速度快 2x -> 權重低 0.5
+        # 速度 = 1 / 權重
+        self.speed_weights = []
+        for curvature in self.curvature_values:
+            # 增加曲率敏感度：使用指數放大
+            enhanced_curvature = curvature ** 0.5  # 平方根讓小曲率也能偵測到
+            # 映射到更大的權重範圍 0.25-3.0 (速度 4x - 0.33x)
+            # 直線更快 彎道更慢
+            weight = 0.25 + (2.75 * enhanced_curvature)
+            self.speed_weights.append(weight)
+
+        # 3. 重新分配時間確保總時間符合 scan_time
+        total_weight = sum(self.speed_weights)
+        self.time_allocations = [w / total_weight for w in self.speed_weights]
+
+        # 4. 計算累積時間 (用於根據 scan_progress 查找當前點)
+        self.cumulative_time = [0.0]
+        for time_alloc in self.time_allocations:
+            self.cumulative_time.append(self.cumulative_time[-1] + time_alloc)
+
+        # 確保最後一個值是 1.0
+        if self.cumulative_time:
+            self.cumulative_time[-1] = 1.0
 
     def update_trigger_rings(self, dt: float = 1.0/60.0):
         """更新觸發光圈動畫
