@@ -84,6 +84,9 @@ class VAVController:
         self.region_mapper: Optional[ContentAwareRegionMapper] = None
         self.region_mode = 'brightness'  # 'brightness', 'color', 'quadrant', 'edge'
 
+        # CV Overlay display
+        self.cv_overlay_enabled = True  # Show CV values on main visual (default enabled)
+
         # Channel levels for audio mixing (before Ellen Ripley)
         self.channel_levels = [1.0, 1.0, 1.0, 1.0]  # 4 channel levels (0.0-1.0)
 
@@ -636,7 +639,8 @@ class VAVController:
                 'rings': self.contour_cv_generator.trigger_rings,
                 'roi_center': (self.contour_cv_generator.anchor_x_pct / 100.0,
                               self.contour_cv_generator.anchor_y_pct / 100.0),
-                'roi_radius': self.contour_cv_generator.range_pct / 100.0 / 2.0
+                'roi_radius': self.contour_cv_generator.range_pct / 100.0 / 2.0,
+                'cv_values': self.cv_values if self.cv_overlay_enabled else None  # CV overlay可選
             }
 
         # Render using Multiverse engine with GPU blend (33-42ms CPU blend eliminated!)
@@ -733,11 +737,21 @@ class VAVController:
     def _update_cv_values(self):
         """Update CV values - 發送 SEQ 到 audio process，接收 CV 值用於 GUI"""
         if self.contour_cv_generator and self.audio_process:
-            # 發送 SEQ1/SEQ2/循環完成狀態到獨立的 audio process (normalized 0-1)
+            # 發送 SEQ1/SEQ2 和觸發事件到獨立的 audio process (normalized 0-1)
             seq1_normalized = self.contour_cv_generator.seq1_value / 10.0
             seq2_normalized = self.contour_cv_generator.seq2_value / 10.0
             scan_loop_completed = self.contour_cv_generator.get_scan_loop_completed()
-            self.audio_process.send_cv_values(seq1_normalized, seq2_normalized, scan_loop_completed)
+
+            # 讀取觸發事件標記
+            env1_trigger = self.contour_cv_generator.env1_triggered
+            env2_trigger = self.contour_cv_generator.env2_triggered
+            env3_trigger = self.contour_cv_generator.env3_triggered
+            env4_trigger = self.contour_cv_generator.env4_triggered
+
+            self.audio_process.send_cv_values(
+                seq1_normalized, seq2_normalized, scan_loop_completed,
+                env1_trigger, env2_trigger, env3_trigger, env4_trigger
+            )
 
             # 從 audio process 接收 CV 值用於 GUI 顯示
             cv_from_audio = self.audio_process.get_cv_values()
@@ -1093,8 +1107,12 @@ class VAVController:
     def enable_region_rendering(self, enabled: bool):
         """Enable/disable region-based rendering"""
         self.use_region_rendering = enabled
+
+    def enable_cv_overlay(self, enabled: bool):
+        """Enable/disable CV overlay display on main visual"""
+        self.cv_overlay_enabled = enabled
         status = "enabled" if enabled else "disabled"
-        print(f"Region-based rendering {status}")
+        print(f"CV overlay {status}")
 
     def set_region_mode(self, mode: str):
         """Set region rendering mode ('brightness', 'color', 'quadrant', 'edge')"""

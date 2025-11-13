@@ -269,9 +269,12 @@ class QtMultiverseRenderer(QOpenGLWidget):
                 // (Needed for ratio > 1 to work correctly with rotation)
             }
 
-            // Apply ratio (stripe density control)
-            float ratio = ratios[ch];
-            float x_sample = uv.x * ratio;
+            // Apply pitch rate (matching Multiverse.cpp logic)
+            // ratios[ch] now contains pitch_rate (0.0009765625 to 1.0)
+            // pitch_rate = 0.5^((1-ratio)*10) where ratio is 0-1 from GUI
+            // Small pitch_rate = slow/sparse stripes, large = fast/dense
+            float pitch_rate = ratios[ch];
+            float x_sample = uv.x * pitch_rate;
 
             // Apply curve (Y-based X-sampling offset)
             if (curve > 0.001) {
@@ -395,6 +398,7 @@ class QtMultiverseRenderer(QOpenGLWidget):
         self.overlay_contour_points = []  # List of (x, y) in pixel coordinates
         self.overlay_scan_point = None  # (x, y) in pixel coordinates
         self.overlay_rings = []  # List of {pos: (x,y), radius: float, color: (r,g,b), alpha: float}
+        self.overlay_cv_values = None  # CV values for dashboard (6 values: ENV1-4, SEQ1-2)
 
         # Rendered output (thread-safe access)
         self.rendered_image = None
@@ -767,6 +771,11 @@ class QtMultiverseRenderer(QOpenGLWidget):
                 self.rendered_image = np.frombuffer(pixels, dtype=np.uint8).reshape(
                     (self.render_height, self.render_width, 3)).copy()
                 self.rendered_image = np.flipud(self.rendered_image)
+
+                # 疊加 CV 數據面板（最上層）
+                if self.overlay_cv_values is not None:
+                    self._draw_cv_dashboard_cpu(self.rendered_image, self.overlay_cv_values)
+
                 glUnmapBuffer(GL_PIXEL_PACK_BUFFER)
             self.pbo_ready[prev_pbo] = False
 
@@ -825,6 +834,7 @@ class QtMultiverseRenderer(QOpenGLWidget):
             self.overlay_contour_points = overlay_data.get('contour_points', [])
             self.overlay_scan_point = overlay_data.get('scan_point', None)
             self.overlay_rings = overlay_data.get('rings', [])
+            self.overlay_cv_values = overlay_data.get('cv_values', None)
 
             # DEBUG overlay data
             if not hasattr(self, '_overlay_debug_counter'):
@@ -837,6 +847,7 @@ class QtMultiverseRenderer(QOpenGLWidget):
             self.overlay_contour_points = []
             self.overlay_scan_point = None
             self.overlay_rings = []
+            self.overlay_cv_values = None
 
         # Handle GPU blend frame (camera/SD input for blending)
         if blend_frame is not None and camera_mix > 0.0:
@@ -966,7 +977,8 @@ class QtMultiverseRenderer(QOpenGLWidget):
                 self.pending_overlay_data = {
                     'contour_points': list(overlay_data.get('contour_points', [])),
                     'scan_point': overlay_data.get('scan_point', None),
-                    'rings': list(overlay_data.get('rings', []))
+                    'rings': list(overlay_data.get('rings', [])),
+                    'cv_values': overlay_data.get('cv_values', None)
                 }
             else:
                 self.pending_overlay_data = None
@@ -1292,6 +1304,127 @@ class QtMultiverseRenderer(QOpenGLWidget):
             glDeleteBuffers(1, [self.overlay_vbo])
 
         self.doneCurrent()
+
+    def _draw_cv_dashboard_cpu(self, frame: np.ndarray, cv_values: np.ndarray):
+        """
+        在 CPU 端繪製 CV 數據面板（最上層）
+
+        Args:
+            frame: RGB 影像 (height, width, 3), uint8
+            cv_values: CV 值陣列 [ENV1, ENV2, ENV3, ENV4, SEQ1, SEQ2] (0-1 range)
+        """
+        if cv_values is None or len(cv_values) < 6:
+            return
+
+        # 將 RGB 轉為 BGR (cv2 使用 BGR)
+        frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+
+        # 面板參數
+        panel_x = 10
+        panel_y = 10
+        panel_width = 280
+        line_height = 30  # 增加行高
+        padding = 12
+
+        # 背景（7 行：ENV1-4, SEQ1-2）
+        num_lines = 6
+        panel_height = padding * 2 + line_height * num_lines
+
+        overlay = frame_bgr.copy()
+        cv2.rectangle(overlay, (panel_x, panel_y),
+                     (panel_x + panel_width, panel_y + panel_height),
+                     (40, 40, 40), -1)
+        cv2.addWeighted(overlay, 0.75, frame_bgr, 0.25, 0, frame_bgr)
+
+        # 邊框
+        cv2.rectangle(frame_bgr, (panel_x, panel_y),
+                     (panel_x + panel_width, panel_y + panel_height),
+                     (100, 100, 100), 1)
+
+        # 文字參數
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.5
+        font_thickness = 1
+
+        y_offset = panel_y + padding + 18
+
+        # 使用統一的配色方案（BGR 格式）
+        colors = {
+            'ENV1': (100, 120, 227),  # Light Vermillion
+            'ENV2': (220, 220, 220),  # Silver White
+            'ENV3': (30, 0, 180),     # Deep Crimson
+            'ENV4': (0, 69, 255),     # Orange Red
+            'SEQ1': (255, 255, 255),  # White
+            'SEQ2': (255, 255, 255),  # White
+        }
+
+        # 轉換為電壓值（0-10V）
+        env1_val = cv_values[0] * 10.0
+        env2_val = cv_values[1] * 10.0
+        env3_val = cv_values[2] * 10.0
+        env4_val = cv_values[3] * 10.0
+        seq1_val = cv_values[4] * 10.0
+        seq2_val = cv_values[5] * 10.0
+
+        # 繪製各 CV 條（移除括弧）
+        labels = [
+            ("ENV1", env1_val, colors['ENV1']),
+            ("ENV2", env2_val, colors['ENV2']),
+            ("ENV3", env3_val, colors['ENV3']),
+            ("ENV4", env4_val, colors['ENV4']),
+            ("SEQ1", seq1_val, colors['SEQ1']),
+            ("SEQ2", seq2_val, colors['SEQ2'])
+        ]
+
+        for label, value, color in labels:
+            self._draw_cv_bar_cpu(frame_bgr, panel_x, y_offset, label, value, color)
+            y_offset += line_height
+
+        # 轉回 RGB
+        frame[:] = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+
+    def _draw_cv_bar_cpu(self, frame: np.ndarray, panel_x: int, y_offset: int,
+                         label: str, value: float, color: tuple):
+        """
+        繪製單個 CV 條狀圖
+
+        Args:
+            frame: BGR 影像
+            value: 0-10V 的電壓值
+            color: BGR 顏色
+        """
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.5
+        font_thickness = 1
+        padding = 12
+
+        # 標籤
+        cv2.putText(frame, f"{label}:", (panel_x + padding, y_offset),
+                   font, font_scale, color, font_thickness)
+
+        # 電壓值
+        voltage_text = f"{value:.1f}V"
+        cv2.putText(frame, voltage_text, (panel_x + 220, y_offset),
+                   font, font_scale - 0.05, color, font_thickness)
+
+        # 條狀圖
+        bar_x = panel_x + 80
+        bar_y = y_offset - 12
+        bar_width = 130
+        bar_height = 12
+
+        # 背景框
+        cv2.rectangle(frame, (bar_x, bar_y),
+                     (bar_x + bar_width, bar_y + bar_height),
+                     (80, 80, 80), 1)
+
+        # 填充條
+        normalized_value = value / 10.0
+        filled_width = int(bar_width * normalized_value)
+        if filled_width > 0:
+            cv2.rectangle(frame, (bar_x + 1, bar_y + 1),
+                         (bar_x + filled_width, bar_y + bar_height - 1),
+                         color, -1)
 
 
 class StandaloneQtRenderer:

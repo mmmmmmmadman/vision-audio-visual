@@ -2,6 +2,76 @@
 
 ---
 
+## [2025-11-13] UI Layout 重構與視覺預覽功能
+
+### UI Layout 完全重構
+- **修正跨列對齊問題**：從 QGridLayout 改為 5 個獨立的 QVBoxLayout
+  - 每個 column 獨立管理自己的控制項
+  - 消除跨列高度干擾問題
+  - 新增 `_create_control_row()` helper 確保一致的 label+control 佈局
+  - 固定 label 寬度為 80px (LABEL_WIDTH) 確保 slider 對齊
+
+- **優化視窗高度**：初始高度從 480px 降為 420px
+  - 消除底部空白
+  - 更好地符合內容大小
+
+- **統一控制項高度**：所有控制項標準化為 16px 高度
+  - Timer 按鈕提升至 24px 以改善可用性
+  - 一致的垂直間距（控制項間 8px）
+
+- **Multiverse slider 對齊修正**：修正 color scheme slider 位置
+  - 在 checkbox 後添加 9px spacing 對齊其他 sliders
+  - Column 2 所有 sliders 現在完美對齊
+
+### 視覺預覽功能
+- **新增 VisualPreviewWidget** (`vav/gui/visual_preview_widget.py`)
+  - 在 CV Meter 視窗顯示主視覺輸出
+  - 固定大小：273×153（與 Anchor XY Pad 相同）
+  - 使用 texture 共享，CPU/GPU 負擔極小
+  - 修正 RGB 顏色轉換確保正確顯示
+
+- **更新 CV Meter Window layout**
+  - Anchor XY Pad 與 Visual Preview 並排顯示
+  - 使用 QHBoxLayout 水平排列
+  - 視窗寬度維持 600px
+
+### CV Overlay 控制
+- **新增 CV Overlay checkbox**
+  - 位於 Column 1 Track 4 vol 下方
+  - 可切換主視覺上的 CV 數值顯示
+  - 不影響輪廓線和圓圈顯示
+  - 預設：啟用
+
+### Audio Processing 修正
+- **Sample-accurate CV output**
+  - 修正 CV 輸出為逐 sample 寫入，而非填滿整個 buffer
+  - Env 輸出現在正確顯示 inactive 時為 0V
+  - 正確的 0-1 範圍映射到 0-10V (ES-8)
+
+### 預設參數調整
+- **Reverb Room**: 0.50 → 1.00 (最大值)
+- **Reverb Damp**: 0.40 → 1.00 (最大值)
+- **Reverb Decay**: 0.60 → 0.80 (80%)
+- **Delay Time R**: 250ms → 300ms
+- **Grain Size**: 0.30 → 0.50 (50%)
+
+### 修改檔案
+- `vav/gui/compact_main_window.py` - 主要 layout 重構
+- `vav/gui/cv_meter_window.py` - 新增視覺預覽
+- `vav/gui/visual_preview_widget.py` - 新 widget（新建）
+- `vav/gui/meter_widget.py` - 文件更新
+- `vav/core/controller.py` - CV overlay 控制
+- `vav/audio/audio_process.py` - Sample-accurate CV 輸出
+- `vav/visual/qt_opengl_renderer.py` - CV overlay 條件渲染
+
+### 技術改進
+- 更好的關注點分離（獨立 column layouts）
+- 一致的 UI 元素大小與間距
+- 減少 audio callback 的記憶體配置
+- 主視窗與預覽間更有效率的 frame 共享
+
+---
+
 ## [2025-11-12] GUI 佈局優化與錯誤修正
 
 ### GUI 改進

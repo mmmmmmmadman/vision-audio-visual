@@ -55,14 +55,6 @@ class MeterWidget(QWidget):
             print(f"METER DEBUG: Wrong length {len(samples)} != {self.num_channels}")
             return
 
-        # DEBUG (disabled for performance)
-        # import time
-        # if not hasattr(self, '_last_debug_time'):
-        #     self._last_debug_time = 0
-        # if time.time() - self._last_debug_time > 1.0:
-        #     print(f"METER DEBUG: Received samples: {samples}")
-        #     self._last_debug_time = time.time()
-
         self.values = np.clip(samples, 0.0, 1.0)
 
         # Update peak hold

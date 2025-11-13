@@ -3,10 +3,11 @@
 """
 
 import numpy as np
-from PyQt6.QtWidgets import QMainWindow, QVBoxLayout, QWidget, QMenu
+from PyQt6.QtWidgets import QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, QMenu
 from PyQt6.QtCore import Qt
 from .meter_widget import MeterWidget
 from .anchor_xy_pad import AnchorXYPad
+from .visual_preview_widget import VisualPreviewWidget
 
 
 class CVMeterWindow(QMainWindow):
@@ -15,7 +16,8 @@ class CVMeterWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("CV Meters")
-        self.resize(600, 370)  # 增加高度以容納 XY Pad (210 + 160)
+        # 增加寬度以容納 XY Pad + Preview 並排 (273 + 5 + 273 = 551, 加上 margins = 561)
+        self.resize(600, 370)
 
         # 中央 widget
         central = QWidget()
@@ -28,9 +30,19 @@ class CVMeterWindow(QMainWindow):
         self.meter_widget = MeterWidget(num_channels=6)
         layout.addWidget(self.meter_widget)
 
-        # Anchor XY Pad
+        # Bottom row: Anchor XY Pad + Visual Preview (並排)
+        bottom_layout = QHBoxLayout()
+        bottom_layout.setSpacing(5)
+
+        # Anchor XY Pad (273x153)
         self.anchor_xy_pad = AnchorXYPad()
-        layout.addWidget(self.anchor_xy_pad)
+        bottom_layout.addWidget(self.anchor_xy_pad)
+
+        # Visual Preview (273x153)
+        self.visual_preview = VisualPreviewWidget()
+        bottom_layout.addWidget(self.visual_preview)
+
+        layout.addLayout(bottom_layout)
 
         # MIDI Learn reference (will be set by main window)
         self.midi_learn = None
@@ -81,6 +93,11 @@ class CVMeterWindow(QMainWindow):
         """更新 CV 值"""
         self.meter_widget.update_values(samples)
 
+    def update_visual_preview(self, frame: np.ndarray):
+        """更新 visual preview"""
+        self.visual_preview.update_frame(frame)
+
     def clear(self):
-        """清除所有 meters"""
+        """清除所有 meters 和 preview"""
         self.meter_widget.clear()
+        self.visual_preview.clear()

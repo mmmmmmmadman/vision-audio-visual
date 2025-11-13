@@ -109,18 +109,12 @@ def audio_process_worker(
     seq2_value = 0.0
     scan_loop_completed = False  # 掃描循環完成標記
 
-    # Previous SEQ values for edge detection
-    prev_seq1 = 0.0
-    prev_seq2 = 0.0
-    prev_x_greater = False
-    prev_y_greater = False
-
     # Channel levels
     channel_levels = [1.0, 1.0, 1.0, 1.0]
 
     def audio_callback(indata: np.ndarray, frames: int) -> np.ndarray:
         """Audio callback - 在獨立 process 中執行"""
-        nonlocal cv_values, seq1_value, seq2_value, scan_loop_completed, prev_x_greater, prev_y_greater
+        nonlocal cv_values, seq1_value, seq2_value, scan_loop_completed
 
         # 處理控制訊息 (non-blocking)
         try:
@@ -176,41 +170,55 @@ def audio_process_worker(
         except:
             pass
 
-        # 嘗試從 queue 讀取最新的 SEQ 值 (non-blocking)
-        # 接收 3 個值: seq1, seq2, scan_loop_completed
+        # 嘗試從 queue 讀取最新的 SEQ 值和觸發事件 (non-blocking)
+        # 接收 7 個值: seq1, seq2, scan_loop_completed, env1_trigger, env2_trigger, env3_trigger, env4_trigger
+        env1_trigger = False
+        env2_trigger = False
+        env3_trigger = False
+        env4_trigger = False
         try:
             while not cv_queue.empty():
                 data = cv_queue.get_nowait()
-                if len(data) == 3:
+                if len(data) == 7:
+                    seq1_value, seq2_value, scan_loop_completed, env1_trigger, env2_trigger, env3_trigger, env4_trigger = data
+                elif len(data) == 3:
+                    # 相容舊版 (只有 3 個值)
                     seq1_value, seq2_value, scan_loop_completed = data
                 else:
-                    # 相容舊版 (只有 2 個值)
-                    seq1_value, seq2_value = data
+                    # 相容更舊版 (只有 2 個值)
+                    seq1_value, seq2_value = data[:2]
                     scan_loop_completed = False
         except:
             pass
 
-        # Envelope 觸發檢測 (基於 SEQ1 和 SEQ2 的邊緣檢測)
-        # ENV1: X > Y 邊緣觸發
-        x_greater = seq1_value > seq2_value
-        if x_greater and not prev_x_greater:
+        # Envelope 觸發處理 (完全信任 contour_scanner 的 retrigger 判斷)
+        # contour_scanner 已經處理了 retrigger 保護，這裡直接執行觸發
+        # ENV1: 觸發事件
+        if env1_trigger:
             envelopes[0].trigger()
-        prev_x_greater = x_greater
+            # 立即更新 cv_values 讓 GUI 看到觸發
+            cv_values[0] = envelopes[0].process()
 
-        # ENV2: Y > X 邊緣觸發
-        y_greater = seq2_value > seq1_value
-        if y_greater and not prev_y_greater:
+        # ENV2: 觸發事件
+        if env2_trigger:
             envelopes[1].trigger()
-        prev_y_greater = y_greater
+            # 立即更新 cv_values 讓 GUI 看到觸發
+            cv_values[1] = envelopes[1].process()
 
-        # ENV3: 當 SEQ1 或 SEQ2 任一超過 0.5 時觸發
-        if seq1_value > 0.5 or seq2_value > 0.5:
-            if not envelopes[2].is_active:
-                envelopes[2].trigger()
+        # ENV3: 觸發事件
+        if env3_trigger:
+            envelopes[2].trigger()
+            # 立即更新 cv_values 讓 GUI 看到觸發
+            cv_values[2] = envelopes[2].process()
 
-        # ENV4: 掃描循環完成觸發
-        if scan_loop_completed:
+        # ENV4: 觸發事件
+        if env4_trigger:
             envelopes[3].trigger()
+            # 立即更新 cv_values 讓 GUI 看到觸發
+            cv_values[3] = envelopes[3].process()
+
+        # Build output array first
+        outdata = np.zeros((frames, audio_io.output_channels), dtype=np.float32)
 
         # Process CV generators (sample-accurate)
         for i in range(frames):
@@ -222,7 +230,14 @@ def audio_process_worker(
             cv_values[4] = seq1_value
             cv_values[5] = seq2_value
 
-        # 回傳 CV 值給 GUI (non-blocking)
+            # Write CV outputs sample-accurately (channels 2-7: ENV1-4, SEQ1-2)
+            # ES-8 使用 -1 到 +1 的音訊範圍對應 -10V 到 +10V
+            # 所以 0-10V 需要映射到 0 到 +1
+            if audio_io.output_channels >= 8:
+                for ch in range(6):
+                    outdata[i, 2 + ch] = cv_values[ch]  # 0-1 範圍對應 0-10V
+
+        # 回傳最後的 CV 值給 GUI (non-blocking)
         try:
             cv_output_queue.put_nowait(cv_values.copy())
         except:
@@ -248,17 +263,9 @@ def audio_process_worker(
         # Process through Ellen Ripley (returns 3 values: left, right, chaos_cv)
         processed_left, processed_right, _ = ellen_ripley.process(master_left, master_right)
 
-        # Build output array
-        outdata = np.zeros((frames, audio_io.output_channels), dtype=np.float32)
+        # Fill audio outputs (L/R) in outdata (CV已經在上面的loop中填充)
         outdata[:, 0] = processed_left  # Audio L
         outdata[:, 1] = processed_right  # Audio R
-
-        # CV outputs (channels 2-7: ENV1-4, SEQ1-2)
-        # ES-8 使用 -1 到 +1 的音訊範圍對應 -10V 到 +10V
-        # 所以 0-10V 需要映射到 0 到 +1
-        if audio_io.output_channels >= 8:
-            for i in range(6):
-                outdata[:, 2 + i] = cv_values[i]  # 0-1 範圍對應 0-10V
 
         # Update display buffer (circular buffer with downsampling, matching Multiverse.cpp)
         # This prevents visual flickering by downsampling audio to display resolution
@@ -371,21 +378,28 @@ class AudioProcess:
         self.running = False
         print("[AudioProcess] Stopped")
 
-    def send_cv_values(self, seq1: float, seq2: float, scan_loop_completed: bool = False):
+    def send_cv_values(self, seq1: float, seq2: float, scan_loop_completed: bool = False,
+                      env1_trigger: bool = False, env2_trigger: bool = False,
+                      env3_trigger: bool = False, env4_trigger: bool = False):
         """
-        發送 SEQ1/SEQ2 值和掃描循環完成標記到 audio process
+        發送 SEQ1/SEQ2 值和 envelope 觸發事件到 audio process
 
         Args:
             seq1: SEQ1 value (0-1)
             seq2: SEQ2 value (0-1)
             scan_loop_completed: 掃描循環完成標記 (用於 ENV4 觸發)
+            env1_trigger: ENV1 觸發事件
+            env2_trigger: ENV2 觸發事件
+            env3_trigger: ENV3 觸發事件
+            env4_trigger: ENV4 觸發事件
         """
         if not self.running:
             return
 
         try:
             # Non-blocking put，避免阻塞 vision thread
-            self.cv_queue.put_nowait((seq1, seq2, scan_loop_completed))
+            self.cv_queue.put_nowait((seq1, seq2, scan_loop_completed,
+                                     env1_trigger, env2_trigger, env3_trigger, env4_trigger))
         except:
             # Queue full，忽略
             pass

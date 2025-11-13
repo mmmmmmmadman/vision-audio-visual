@@ -46,6 +46,23 @@ class ContourScanner:
         self.env3_value = 0.0  # ENV3觸發式 0-10V
         self.env4_value = 0.0  # ENV4觸發式 0-10V
 
+        # 正規化的 X Y 座標 (0-1)
+        self.x_normalized = 0.0
+        self.y_normalized = 0.0
+
+        # Envelope 觸發事件 (當幀有觸發時設為 True)
+        self.env1_triggered = False
+        self.env2_triggered = False
+        self.env3_triggered = False
+        self.env4_triggered = False
+
+        # Envelope decay 狀態追蹤 (用於 retrigger 保護)
+        self.env1_decay_active = False
+        self.env2_decay_active = False
+        self.env3_decay_active = False
+        self.env4_decay_active = False
+        self.env_decay_counters = [0.0, 0.0, 0.0, 0.0]  # 剩餘 decay 時間 (秒)
+
         # Envelope觸發狀態追蹤
         self.prev_x_greater = False  # 上一幀 X > Y 的狀態
         self.prev_y_greater = False  # 上一幀 Y > X 的狀態
@@ -275,89 +292,108 @@ class ContourScanner:
         self.seq1_value = seq1_normalized * 10.0
         self.seq2_value = seq2_normalized * 10.0
 
+        # 保存正規化的 X Y 座標 (用於 envelope 觸發)
+        self.x_normalized = x_normalized
+        self.y_normalized = y_normalized
+
+        # 更新 envelope decay 計數器
+        for i in range(4):
+            if self.env_decay_counters[i] > 0:
+                self.env_decay_counters[i] -= dt
+                if self.env_decay_counters[i] <= 0:
+                    self.env_decay_counters[i] = 0
+                    # Decay 完成 更新狀態
+                    if i == 0:
+                        self.env1_decay_active = False
+                    elif i == 1:
+                        self.env2_decay_active = False
+                    elif i == 2:
+                        self.env3_decay_active = False
+                    elif i == 3:
+                        self.env4_decay_active = False
+
+        # 清除上一幀的觸發標記
+        self.env1_triggered = False
+        self.env2_triggered = False
+        self.env3_triggered = False
+        self.env4_triggered = False
+
         # ENV1觸發檢測: X > Y邊緣觸發 (使用原始 x, y 座標)
         x_greater = x_normalized > y_normalized
         if x_greater and not self.prev_x_greater:
-            # 從X≤Y變成X>Y 觸發ENV1
-            # 創建視覺觸發光圈（不需要 envelope 物件）
-            self.trigger_rings.append({
-                'pos': (scan_x, scan_y),
-                'radius': 15,
-                'alpha': 1.0,
-                'color': CV_COLORS_BGR['ENV1'],
-                'decay_time': env_decay_times[0] if len(env_decay_times) > 0 else 1.0
-            })
-            self.last_trigger_positions['env1'] = (scan_x, scan_y, CV_COLORS_BGR['ENV1'])
-
-            # 如果有 envelope 物件也呼叫 trigger（相容舊架構）
-            if envelopes and len(envelopes) > 0:
-                envelopes[0].trigger()
+            # 從X≤Y變成X>Y 觸發ENV1 (檢查 retrigger 保護)
+            if not self.env1_decay_active:
+                self.env1_triggered = True
+                self.env1_decay_active = True
+                decay_time = env_decay_times[0] if len(env_decay_times) > 0 else 1.0
+                self.env_decay_counters[0] = decay_time
+                # 創建視覺觸發光圈
+                self.trigger_rings.append({
+                    'pos': (scan_x, scan_y),
+                    'radius': 15,
+                    'alpha': 1.0,
+                    'color': CV_COLORS_BGR['ENV1'],
+                    'decay_time': decay_time
+                })
+                self.last_trigger_positions['env1'] = (scan_x, scan_y, CV_COLORS_BGR['ENV1'])
         self.prev_x_greater = x_greater
 
         # ENV2觸發檢測: Y > X邊緣觸發 (使用原始 x, y 座標)
         y_greater = y_normalized > x_normalized
         if y_greater and not self.prev_y_greater:
-            # 從Y≤X變成Y>X 觸發ENV2
-            # 創建視覺觸發光圈（不需要 envelope 物件）
-            self.trigger_rings.append({
-                'pos': (scan_x, scan_y),
-                'radius': 15,
-                'alpha': 1.0,
-                'color': CV_COLORS_BGR['ENV2'],
-                'decay_time': env_decay_times[1] if len(env_decay_times) > 1 else 1.0
-            })
-            self.last_trigger_positions['env2'] = (scan_x, scan_y, CV_COLORS_BGR['ENV2'])
-
-            # 如果有 envelope 物件也呼叫 trigger（相容舊架構）
-            if envelopes and len(envelopes) > 1:
-                envelopes[1].trigger()
+            # 從Y≤X變成Y>X 觸發ENV2 (檢查 retrigger 保護)
+            if not self.env2_decay_active:
+                self.env2_triggered = True
+                self.env2_decay_active = True
+                decay_time = env_decay_times[1] if len(env_decay_times) > 1 else 1.0
+                self.env_decay_counters[1] = decay_time
+                # 創建視覺觸發光圈
+                self.trigger_rings.append({
+                    'pos': (scan_x, scan_y),
+                    'radius': 15,
+                    'alpha': 1.0,
+                    'color': CV_COLORS_BGR['ENV2'],
+                    'decay_time': decay_time
+                })
+                self.last_trigger_positions['env2'] = (scan_x, scan_y, CV_COLORS_BGR['ENV2'])
         self.prev_y_greater = y_greater
 
         # ENV3觸發檢測: 當 X 或 Y 任一超過 0.5 時觸發
         threshold_trigger = x_normalized > 0.5 or y_normalized > 0.5
         if threshold_trigger and not self.prev_high_curvature:
-            # 從低於閾值變成超過閾值 觸發ENV3
-            # 創建視覺觸發光圈（不需要 envelope 物件）
-            self.trigger_rings.append({
-                'pos': (scan_x, scan_y),
-                'radius': 15,
-                'alpha': 1.0,
-                'color': CV_COLORS_BGR['ENV3'],
-                'decay_time': env_decay_times[2] if len(env_decay_times) > 2 else 1.0
-            })
-            self.last_trigger_positions['env3'] = (scan_x, scan_y, CV_COLORS_BGR['ENV3'])
-
-            # 如果有 envelope 物件也呼叫 trigger（相容舊架構）
-            if envelopes and len(envelopes) > 2:
-                envelopes[2].trigger()
+            # 從低於閾值變成超過閾值 觸發ENV3 (檢查 retrigger 保護)
+            if not self.env3_decay_active:
+                self.env3_triggered = True
+                self.env3_decay_active = True
+                decay_time = env_decay_times[2] if len(env_decay_times) > 2 else 1.0
+                self.env_decay_counters[2] = decay_time
+                # 創建視覺觸發光圈
+                self.trigger_rings.append({
+                    'pos': (scan_x, scan_y),
+                    'radius': 15,
+                    'alpha': 1.0,
+                    'color': CV_COLORS_BGR['ENV3'],
+                    'decay_time': decay_time
+                })
+                self.last_trigger_positions['env3'] = (scan_x, scan_y, CV_COLORS_BGR['ENV3'])
         self.prev_high_curvature = threshold_trigger
 
         # ENV4觸發檢測: 掃描循環完成
         if self.scan_loop_completed:
-            # 掃描循環完成，觸發 ENV4
-            self.trigger_rings.append({
-                'pos': (scan_x, scan_y),
-                'radius': 15,
-                'alpha': 1.0,
-                'color': CV_COLORS_BGR['ENV4'],
-                'decay_time': env_decay_times[3] if len(env_decay_times) > 3 else 1.0
-            })
-            self.last_trigger_positions['env4'] = (scan_x, scan_y, CV_COLORS_BGR['ENV4'])
-
-            # 如果有 envelope 物件也呼叫 trigger
-            if envelopes and len(envelopes) > 3:
-                envelopes[3].trigger()
-
-        # 更新envelope輸出值 0-10V
-        if envelopes:
-            if len(envelopes) > 0:
-                self.env1_value = envelopes[0].value * 10.0
-            if len(envelopes) > 1:
-                self.env2_value = envelopes[1].value * 10.0
-            if len(envelopes) > 2:
-                self.env3_value = envelopes[2].value * 10.0
-            if len(envelopes) > 3:
-                self.env4_value = envelopes[3].value * 10.0
+            # 掃描循環完成，觸發 ENV4 (檢查 retrigger 保護)
+            if not self.env4_decay_active:
+                self.env4_triggered = True
+                self.env4_decay_active = True
+                decay_time = env_decay_times[3] if len(env_decay_times) > 3 else 1.0
+                self.env_decay_counters[3] = decay_time
+                self.trigger_rings.append({
+                    'pos': (scan_x, scan_y),
+                    'radius': 15,
+                    'alpha': 1.0,
+                    'color': CV_COLORS_BGR['ENV4'],
+                    'decay_time': decay_time
+                })
+                self.last_trigger_positions['env4'] = (scan_x, scan_y, CV_COLORS_BGR['ENV4'])
 
         # 更新 Sine LFO 與變種訊號
         self._update_lfo()
@@ -519,7 +555,7 @@ class ContourScanner:
         # 掃描進度條已停用
         # self._draw_scan_progress(output)
 
-        # CV 數據面板已停用
+        # CV 數據面板 (已移到 GPU renderer CPU端繪製)
         # self._draw_data_dashboard(output, cv_values)
 
         return output
@@ -597,16 +633,18 @@ class ContourScanner:
         y_offset += line_height
 
         # 使用從 audio process 傳來的 CV 值 如果沒有則用本地值
-        if cv_values is not None and len(cv_values) >= 5:
+        if cv_values is not None and len(cv_values) >= 6:
             env1_val = cv_values[0] * 10.0  # 轉換為 0-10V
             env2_val = cv_values[1] * 10.0
             env3_val = cv_values[2] * 10.0
-            seq1_val = cv_values[3] * 10.0
-            seq2_val = cv_values[4] * 10.0
+            env4_val = cv_values[3] * 10.0
+            seq1_val = cv_values[4] * 10.0
+            seq2_val = cv_values[5] * 10.0
         else:
             env1_val = self.env1_value
             env2_val = self.env2_value
             env3_val = self.env3_value
+            env4_val = self.env4_value
             seq1_val = self.seq1_value
             seq2_val = self.seq2_value
 
@@ -620,9 +658,14 @@ class ContourScanner:
                          env2_val, CV_COLORS_BGR['ENV2'])
         y_offset += line_height
 
-        # ENV3 (對角線)
-        self._draw_cv_bar(frame, panel_x, y_offset, "ENV3 (X=Y)",
+        # ENV3 (閾值)
+        self._draw_cv_bar(frame, panel_x, y_offset, "ENV3 (Thr)",
                          env3_val, CV_COLORS_BGR['ENV3'])
+        y_offset += line_height
+
+        # ENV4 (循環)
+        self._draw_cv_bar(frame, panel_x, y_offset, "ENV4 (Loop)",
+                         env4_val, CV_COLORS_BGR['ENV4'])
         y_offset += line_height
 
         # SEQ1 (X座標)

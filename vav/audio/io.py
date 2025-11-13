@@ -70,14 +70,14 @@ class AudioIO:
             # Adjust output channels to device maximum
             if output_device < len(devices):
                 max_out = devices[output_device]['max_output_channels']
-                # Prefer 7 channels (stereo + 5 CV), fall back to stereo if not supported
-                if max_out >= 7:
-                    self.output_channels = 7
+                # Prefer 8 channels (stereo + 6 CV for ES-8), fall back to stereo if not supported
+                if max_out >= 8:
+                    self.output_channels = 8
                 else:
                     self.output_channels = min(2, max_out)
                 print(f"Output device {output_device}: {devices[output_device]['name']}")
                 print(f"  Channels: {self.output_channels}/{max_out}")
-                if self.output_channels < 7:
+                if self.output_channels < 8:
                     print(f"  Warning: Device only supports {max_out} channels, CV output disabled")
 
         # Restart stream if it was active
