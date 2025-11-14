@@ -3,10 +3,9 @@
 """
 
 import numpy as np
-from PyQt6.QtWidgets import QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, QMenu
+from PyQt6.QtWidgets import QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, QMenu, QSlider, QLabel
 from PyQt6.QtCore import Qt
 from .meter_widget import MeterWidget
-from .anchor_xy_pad import AnchorXYPad
 from .visual_preview_widget import VisualPreviewWidget
 
 
@@ -16,29 +15,48 @@ class CVMeterWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("CV Meters")
-        # 增加寬度以容納 XY Pad + Preview 並排 (273 + 5 + 273 = 551, 加上 margins = 561)
-        self.resize(600, 370)
+        # Visual Preview with anchor overlay (546x230 + meters)
+        self.resize(560, 480)
 
         # 中央 widget
         central = QWidget()
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
         layout.setContentsMargins(5, 5, 5, 5)
-        layout.setSpacing(5)
+        layout.setSpacing(10)
 
         # Meter widget (6 channels: ENV1-4, SEQ1-2)
         self.meter_widget = MeterWidget(num_channels=6)
-        layout.addWidget(self.meter_widget)
+        self.meter_widget.setMinimumHeight(180)
+        layout.addWidget(self.meter_widget, stretch=1)
 
-        # Bottom row: Anchor XY Pad + Visual Preview (並排)
+        # Bottom row: Range slider + Visual Preview
         bottom_layout = QHBoxLayout()
-        bottom_layout.setSpacing(5)
+        bottom_layout.setSpacing(10)
 
-        # Anchor XY Pad (273x153)
-        self.anchor_xy_pad = AnchorXYPad()
-        bottom_layout.addWidget(self.anchor_xy_pad)
+        # Range slider (vertical, left side)
+        range_container = QVBoxLayout()
+        range_container.setSpacing(5)
 
-        # Visual Preview (273x153)
+        range_label = QLabel("Range")
+        range_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        range_container.addWidget(range_label)
+
+        self.range_slider = QSlider(Qt.Orientation.Vertical)
+        self.range_slider.setMinimum(1)
+        self.range_slider.setMaximum(120)
+        self.range_slider.setValue(50)
+        self.range_slider.setFixedHeight(200)
+        self.range_slider.valueChanged.connect(self._on_range_changed)
+        range_container.addWidget(self.range_slider)
+
+        self.range_value_label = QLabel("50%")
+        self.range_value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        range_container.addWidget(self.range_value_label)
+
+        bottom_layout.addLayout(range_container)
+
+        # Visual Preview with anchor overlay (546x306)
         self.visual_preview = VisualPreviewWidget()
         bottom_layout.addWidget(self.visual_preview)
 
@@ -47,23 +65,46 @@ class CVMeterWindow(QMainWindow):
         # MIDI Learn reference (will be set by main window)
         self.midi_learn = None
 
+        # Controller reference (will be set by main window)
+        self.controller = None
+
+    def set_controller(self, controller):
+        """設定 controller 並連接 anchor position signal"""
+        self.controller = controller
+
+        # Connect visual preview position changes to controller
+        def on_position_changed(x_pct, y_pct):
+            if self.controller and self.controller.contour_cv_generator:
+                self.controller.contour_cv_generator.set_anchor_position(x_pct, y_pct)
+
+        self.visual_preview.position_changed.connect(on_position_changed)
+
+    def _on_range_changed(self, value: int):
+        """Range slider changed"""
+        self.range_value_label.setText(f"{value}%")
+        self.visual_preview.set_range(float(value))
+
+        # Update controller
+        if self.controller and self.controller.contour_cv_generator:
+            self.controller.contour_cv_generator.set_range(float(value))
+
     def setup_midi_learn(self, midi_learn):
         """設定 MIDI Learn 並註冊 Anchor XY 參數"""
         self.midi_learn = midi_learn
 
         # Register Anchor X/Y for MIDI Learn
         def anchor_x_midi_callback(value):
-            self.anchor_xy_pad.set_position(value, self.anchor_xy_pad.y_pct, emit_signal=True)
+            self.visual_preview.set_position(value, self.visual_preview.y_pct, emit_signal=True)
 
         def anchor_y_midi_callback(value):
             # Invert Y: MIDI 0-100 → GUI 100-0
             inverted_y = 100.0 - value
-            self.anchor_xy_pad.set_position(self.anchor_xy_pad.x_pct, inverted_y, emit_signal=True)
+            self.visual_preview.set_position(self.visual_preview.x_pct, inverted_y, emit_signal=True)
 
         self.midi_learn.register_parameter("anchor_x", anchor_x_midi_callback, 0.0, 100.0)
         self.midi_learn.register_parameter("anchor_y", anchor_y_midi_callback, 0.0, 100.0)
 
-        # Add context menu for XY Pad
+        # Add context menu for Visual Preview
         def show_xy_context_menu(pos):
             menu = QMenu()
             learn_x_action = menu.addAction("MIDI Learn X")
@@ -74,7 +115,7 @@ class CVMeterWindow(QMainWindow):
             menu.addSeparator()
             clear_all_action = menu.addAction("Clear All MIDI Mappings")
 
-            action = menu.exec(self.anchor_xy_pad.mapToGlobal(pos))
+            action = menu.exec(self.visual_preview.mapToGlobal(pos))
 
             if action == learn_x_action:
                 self.midi_learn.enter_learn_mode("anchor_x")
@@ -87,7 +128,7 @@ class CVMeterWindow(QMainWindow):
             elif action == clear_all_action:
                 self.midi_learn.clear_all_mappings()
 
-        self.anchor_xy_pad.customContextMenuRequested.connect(show_xy_context_menu)
+        self.visual_preview.customContextMenuRequested.connect(show_xy_context_menu)
 
     def update_values(self, samples: np.ndarray):
         """更新 CV 值"""

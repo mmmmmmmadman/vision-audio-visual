@@ -80,7 +80,7 @@ class ContourScanner:
         self.prev_anchor_y_pct = self.anchor_y_pct
         self.prev_range_pct = self.range_pct
         self.prev_gray = None
-        self.scene_change_threshold = 5.0  # 場景變化閾值 百分比
+        self.scene_change_threshold = 2.0  # 場景變化閾值 百分比 (可從 GUI 調整 1-10%)
 
         # 檢測時的畫面尺寸 用於繪製時縮放
         self.detection_width = 1920

@@ -2,6 +2,66 @@
 
 ---
 
+## [2025-11-14] CV Meters 視窗整合與 Multiverse Ratio 功能實作
+
+### CV Meters 視窗重新設計
+- **整合 Anchor XY Pad 到 Visual Preview**:
+  - 移除獨立的 AnchorXYPad widget
+  - 在 Visual Preview (546x230) 上直接繪製 anchor crosshair 和 ROI circle
+  - 支援滑鼠拖曳直接控制 anchor 位置
+  - 保留完整 MIDI Learn 功能 (Anchor X/Y)
+
+- **Range 控制移至 CV Meters 視窗**:
+  - 從 main controller 移動 Range slider 到 CV Meters 視窗
+  - 垂直 slider (1-120%, default 50%) 位於 Visual Preview 左側
+  - 同步更新 visual preview 的 ROI circle 和 controller
+
+- **視窗佈局優化**:
+  - Meter widget 高度增加到 200px 最小高度
+  - Visual Preview 從 306 降到 230 高度
+  - 視窗預設大小 560x480
+  - 元件間距優化為 10px
+
+### Scene Change Threshold 參數
+- **新增可調整門檻**: Col1 Timer 下方新增 Scene 參數
+  - 範圍 1-10%, 預設 2%
+  - 控制輪廓重新掃描的場景變化靈敏度
+  - 使用 cv2.absdiff() 偵測幀間差異
+
+### Multiverse Ratio 功能修復與調整
+- **問題分析**: Ratio 功能無作用
+  - 原版 Multiverse 在 audio processing 階段做 pitch shifting
+  - VAV 架構是 buffer-based 而非 sample-by-sample
+  - 無法直接實作原版的 circular pitch buffer 機制
+
+- **Shader 端實作方案**:
+  - 在 shader 中用 texture coordinate 變換模擬視覺效果
+  - `x_sample = uv.x * pitch_rate * 10.0`
+  - **注意**: 視覺行為與原版相反但功能正常
+    - ratio 小 (slider 左) → 條紋稀疏
+    - ratio 大 (slider 右) → 條紋密集
+
+- **參數範圍調整**:
+  - Controller clip 範圍: 0.25-10.0 改為 0.01-10.0
+  - 允許更小的 pitch_rate 值以達到更稀疏的條紋
+  - 預設值改為 0.0 (最稀疏狀態)
+  - Shader 係數: ×10.0 讓稀疏範圍更明顯
+
+- **實作限制說明**:
+  - 這不是真正的 pitch shifting, 只是視覺模擬
+  - 方向性與原版相反 (除法/乘法理解困難)
+  - 需要 GL_REPEAT texture wrapping 支援
+
+### 修改檔案
+- `vav/gui/cv_meter_window.py` - 整合 Range slider, 移除 XY Pad, 連接 controller
+- `vav/gui/visual_preview_widget.py` - 整合 anchor 控制, 滑鼠事件, overlay 繪製
+- `vav/gui/compact_main_window.py` - Scene threshold slider, ratio 預設值 0.0
+- `vav/cv_generator/contour_scanner.py` - Scene threshold 預設 2.0
+- `vav/visual/qt_opengl_renderer.py` - Ratio shader 實作, debug print
+- `vav/core/controller.py` - Ratio clip 範圍 0.01-10.0
+
+---
+
 ## [2025-11-14] Alien4 參數優化與 Seq1 控制整合
 
 ### Alien4 Poly 隨機分布優化

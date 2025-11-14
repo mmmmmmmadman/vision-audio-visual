@@ -41,18 +41,23 @@ class AudioIO:
             for i, dev in enumerate(devices)
         ]
 
-    def set_devices(self, input_device: int = None, output_device: int = None):
-        """Set input/output devices and restart stream if running"""
+    def set_devices(self, input_device: int = None, output_device: int = None, buffer_size: int = None):
+        """Set input/output devices and buffer size, restart stream if running"""
         devices = sd.query_devices()
 
         # Check if stream needs to be restarted
         was_active = self.is_active()
         callback_backup = self.callback if was_active else None
 
-        # Stop stream if active (must stop before changing devices)
+        # Stop stream if active (must stop before changing devices/buffer)
         if was_active:
-            print("  Stopping audio stream to change devices...")
+            print("  Stopping audio stream to change devices/buffer...")
             self.stop()
+
+        # Update buffer size if provided
+        if buffer_size is not None and buffer_size != self.buffer_size:
+            print(f"  Changing buffer size: {self.buffer_size} → {buffer_size}")
+            self.buffer_size = buffer_size
 
         # Update input device
         if input_device is not None:
@@ -82,7 +87,7 @@ class AudioIO:
 
         # Restart stream if it was active
         if was_active and callback_backup:
-            print("  Restarting audio stream with new devices...")
+            print("  Restarting audio stream with new settings...")
             try:
                 self.start(callback_backup)
                 print("  Audio stream restarted successfully")

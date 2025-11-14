@@ -65,11 +65,11 @@ class CompactMainWindow(QMainWindow):
         # CV Meter Window (independent)
         self.cv_meter_window = CVMeterWindow()
 
-        # Setup MIDI Learn for Anchor XY Pad in CV Meter Window
-        self.cv_meter_window.setup_midi_learn(self.midi_learn)
+        # Set controller reference for CV Meter Window
+        self.cv_meter_window.set_controller(self.controller)
 
-        # Connect Anchor XY Pad position changes to controller
-        self.cv_meter_window.anchor_xy_pad.position_changed.connect(self._on_anchor_xy_changed)
+        # Setup MIDI Learn for Anchor XY in CV Meter Window
+        self.cv_meter_window.setup_midi_learn(self.midi_learn)
 
         self.cv_meter_window.show()
 
@@ -396,7 +396,22 @@ class CompactMainWindow(QMainWindow):
         timer_row.addLayout(timer_layout)
         col1_layout.addLayout(timer_row)
 
-        # Timer state
+        # Scene Change Threshold (1-10%)
+        self.scene_threshold_slider = QSlider(Qt.Orientation.Horizontal)
+        self.scene_threshold_slider.setFixedHeight(16)
+        self.scene_threshold_slider.setFixedWidth(120)
+        self._apply_slider_style(self.scene_threshold_slider, COLOR_COL1)
+        self.scene_threshold_slider.setMinimum(1)
+        self.scene_threshold_slider.setMaximum(10)
+        self.scene_threshold_slider.setValue(2)
+        self.scene_threshold_slider.valueChanged.connect(self._on_scene_threshold_changed)
+        self._make_slider_learnable(self.scene_threshold_slider, "scene_threshold", self._on_scene_threshold_changed)
+        self.scene_threshold_label = QLabel("2%")
+        self.scene_threshold_label.setFixedWidth(30)
+        row = self._create_control_row("Scene", self.scene_threshold_slider, self.scene_threshold_label, LABEL_WIDTH)
+        col1_layout.addLayout(row)
+
+        # Timer state variables (initialized after layout creation)
         self.timer_running = False
         self.timer_remaining = 0  # seconds
         self.timer_total = 0  # seconds
@@ -517,10 +532,10 @@ class CompactMainWindow(QMainWindow):
         self._apply_slider_style(self.global_ratio_slider, COLOR_COL2)
         self.global_ratio_slider.setMinimum(0)  # 0.0
         self.global_ratio_slider.setMaximum(100)  # 1.0
-        self.global_ratio_slider.setValue(100)  # 1.0 default (no pitch shift)
+        self.global_ratio_slider.setValue(0)  # 0.0 default (sparsest stripes)
         self.global_ratio_slider.valueChanged.connect(self._on_global_ratio_changed)
         self._make_slider_learnable(self.global_ratio_slider, "global_ratio", self._on_global_ratio_changed)
-        self.global_ratio_label = QLabel("1.00")
+        self.global_ratio_label = QLabel("0.00")
         self.global_ratio_label.setFixedWidth(30)
         row = self._create_control_row("Ratio", self.global_ratio_slider, self.global_ratio_label, LABEL_WIDTH)
         col2_layout.addLayout(row)
@@ -1257,8 +1272,8 @@ class CompactMainWindow(QMainWindow):
         self.controller.set_cv_range(float(value))
         _, label = self.range_slider
         label.setText(f"{value}%")
-        # Update XY Pad to show ROI circle
-        self.cv_meter_window.anchor_xy_pad.set_range(float(value))
+        # Update Visual Preview to show ROI circle
+        self.cv_meter_window.visual_preview.set_range(float(value))
 
     def _on_threshold_changed(self, value: int):
         """Edge detection threshold (0-255)"""
@@ -1755,6 +1770,12 @@ class CompactMainWindow(QMainWindow):
         self.param_updated.emit(param_name, channel, value)
 
     # Timer event handlers
+    def _on_scene_threshold_changed(self, value: int):
+        """Scene change threshold changed (1-10%)"""
+        self.scene_threshold_label.setText(f"{value}%")
+        if hasattr(self, 'controller') and self.controller and self.controller.contour_cv_generator:
+            self.controller.contour_cv_generator.scene_change_threshold = float(value)
+
     def _on_timer_toggle(self):
         """Toggle timer start/stop"""
         if not self.timer_running:

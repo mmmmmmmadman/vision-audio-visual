@@ -1049,9 +1049,9 @@ class VAVController:
             self.renderer_params['channel_intensities'][channel] = intensity
 
     def set_renderer_channel_ratio(self, channel: int, ratio: float):
-        """Set ratio for a specific channel (0.25-10.0, stripe density)"""
+        """Set ratio for a specific channel (0.01-10.0, stripe density)"""
         if 0 <= channel < 4:
-            ratio = np.clip(ratio, 0.25, 10.0)
+            ratio = np.clip(ratio, 0.01, 10.0)
             self.renderer_params['channel_ratios'][channel] = ratio
 
     def set_renderer_camera_mix(self, camera_mix: float):
@@ -1102,6 +1102,44 @@ class VAVController:
         """Set Ellen Ripley chaos parameters"""
         if self.audio_process:
             self.audio_process.set_ellen_ripley_chaos_params(rate, amount, shape)
+
+    # Alien4 effect controls
+    def set_alien4_documenta_params(self, mix: float = None, feedback: float = None,
+                                   speed: float = None, eq_low: float = None,
+                                   eq_mid: float = None, eq_high: float = None,
+                                   poly: int = None):
+        """Set Alien4 Documenta (Loop+EQ) parameters"""
+        if self.audio_process:
+            self.audio_process.set_alien4_documenta_params(
+                mix=mix, feedback=feedback, speed=speed,
+                eq_low=eq_low, eq_mid=eq_mid, eq_high=eq_high, poly=poly)
+
+    def set_alien4_recording(self, enabled: bool):
+        """Set Alien4 recording state"""
+        if self.audio_process:
+            self.audio_process.set_alien4_recording(enabled)
+
+    def set_alien4_delay_params(self, time_l: float = None, time_r: float = None,
+                               feedback: float = None, wet_dry: float = None):
+        """Set Alien4 delay parameters"""
+        if self.audio_process:
+            self.audio_process.set_alien4_delay_params(
+                time_l=time_l, time_r=time_r, feedback=feedback, wet_dry=wet_dry)
+
+    def set_alien4_reverb_params(self, decay: float = None, wet_dry: float = None):
+        """Set Alien4 reverb parameters"""
+        if self.audio_process:
+            self.audio_process.set_alien4_reverb_params(decay=decay, wet_dry=wet_dry)
+
+    def set_alien4_scan(self, value: float):
+        """Set Alien4 scan position (0.0-1.0)"""
+        if self.audio_process:
+            self.audio_process.set_alien4_scan(value)
+
+    def set_alien4_gate_threshold(self, value: float):
+        """Set Alien4 gate threshold (0.0-1.0, lower=more sensitive)"""
+        if self.audio_process:
+            self.audio_process.set_alien4_gate_threshold(value)
 
     # Region-based rendering controls
     def enable_region_rendering(self, enabled: bool):
