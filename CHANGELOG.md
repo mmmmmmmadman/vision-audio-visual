@@ -2,6 +2,44 @@
 
 ---
 
+## [2025-11-14] Alien4 參數優化與 Seq1 控制整合
+
+### Alien4 Poly 隨機分布優化
+- **隨機 Speed 範圍擴大**: -2.0~+2.0 擴大到 -4.0~+4.0
+- **Redistributive 觸發邏輯調整**:
+  - Scan 改變: 觸發 redistributeVoices (支援 Seq1 控制)
+  - Len 改變: 不觸發 redistributeVoices (保持穩定性)
+  - Poly 改變: 觸發 redistributeVoices (原有功能)
+
+### Seq1 控制 Alien4 Scan
+- **即時控制**: Seq1 電壓 (0-1V) 直接對應 Alien4 Scan 位置
+- **GUI 同步顯示**: Scan slider 即時顯示 Seq1 控制值
+  - 使用 blockSignals 防止回饋迴路
+  - 透過 cv_values[4] 讀取 seq1_value
+
+### EQ 功能調整
+- **Cut-only 模式**: 三頻段 EQ 改為只支援衰減
+  - Low: 200Hz lowshelf, 0 到 -20dB
+  - Mid: 2kHz peak, 0 到 -20dB
+  - High: 8kHz highshelf, 0 到 -20dB
+- **GUI 範圍更新**: Slider 範圍從 -20~+20 改為 -20~0
+
+### Feedback 參數調整
+- **最大值**: 從 0.5 改回 0.8
+- **GUI 範圍**: Slider 0-80 對應 0.0-0.8
+- **安全係數**: 保留 0.8x safety scaling
+
+### Delay Time Smoothing 增強
+- **Smoothing 係數**: 從 0.2 降到 0.05 (變化速度降為 1/4)
+- **目的**: 防止快速調整 Delay Time 時產生破音
+
+### 修改檔案
+- `alien4_extension.cpp` - EQ cut-only, feedback 0.8, delay smoothing, redistribution 邏輯
+- `vav/audio/audio_process.py` - Seq1 控制 Scan
+- `vav/gui/compact_main_window.py` - EQ/Feedback slider 範圍, Scan GUI 同步
+
+---
+
 ## [2025-11-13] 輪廓掃描變速系統與 CV 輸出優化
 
 ### 變速掃描系統

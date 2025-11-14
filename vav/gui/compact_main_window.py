@@ -52,8 +52,7 @@ class CompactMainWindow(QMainWindow):
         # Build UI
         self._build_ui()
 
-        # Enable Ellen Ripley and Multiverse by default after UI is built
-        self.controller.enable_ellen_ripley(True)
+        # Enable Multiverse by default after UI is built
         self.controller.enable_multiverse_rendering(True)
         self.controller.enable_region_rendering(True)
         self.controller.set_region_mode('brightness')
@@ -647,262 +646,255 @@ class CompactMainWindow(QMainWindow):
             row = self._create_control_row(f"Ch{i+1} Angle", angle_slider, angle_label, LABEL_WIDTH)
             col3_layout.addLayout(row)
 
-        # ===== COLUMN 4: Ellen Ripley Delay+Grain =====
+        # ===== COLUMN 4: Alien4 Loop+EQ =====
 
-        # Ellen Ripley is always enabled (no checkbox)
-        # Enable Ellen Ripley immediately during initialization
+        # REC (Recording button - similar to Timer Start button)
+        rec_row_layout = QHBoxLayout()
+        rec_row_layout.setSpacing(5)
+        rec_row_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Delay Time L
-        self.er_delay_time_l_slider = QSlider(Qt.Orientation.Horizontal)
-        self.er_delay_time_l_slider.setFixedHeight(16)
-        self.er_delay_time_l_slider.setFixedWidth(120)
-        self._apply_slider_style(self.er_delay_time_l_slider, COLOR_COL4)
-        self.er_delay_time_l_slider.setMinimum(1)
-        self.er_delay_time_l_slider.setMaximum(2000)
-        self.er_delay_time_l_slider.setValue(250)
-        self.er_delay_time_l_slider.valueChanged.connect(self._on_er_delay_time_l_changed)
-        self._make_slider_learnable(self.er_delay_time_l_slider, "er_delay_time_l", self._on_er_delay_time_l_changed)
-        self.er_delay_time_l_label = QLabel("0.25s")
-        self.er_delay_time_l_label.setFixedWidth(35)
-        row = self._create_control_row("Delay Time L", self.er_delay_time_l_slider, self.er_delay_time_l_label, LABEL_WIDTH)
+        self.alien4_rec_button = QPushButton("REC")
+        self.alien4_rec_button.setFixedWidth(50)
+        self.alien4_rec_button.setFixedHeight(24)
+        self.alien4_rec_button.setCheckable(True)
+        self.alien4_rec_button.clicked.connect(self._on_alien4_rec_toggle)
+        rec_row_layout.addWidget(self.alien4_rec_button)
+        rec_row_layout.addStretch()
+
+        rec_row = QHBoxLayout()
+        rec_row.setSpacing(5)
+        rec_row.setContentsMargins(0, 0, 0, 0)
+        rec_label = self._fixed_height_label("REC", LABEL_WIDTH, align_left=True)
+        rec_row.addWidget(rec_label)
+        rec_row.addLayout(rec_row_layout)
+        col4_layout.addLayout(rec_row)
+
+        # SCAN (Slice scan, 0-100%)
+        self.alien4_scan_slider = QSlider(Qt.Orientation.Horizontal)
+        self.alien4_scan_slider.setFixedHeight(16)
+        self.alien4_scan_slider.setFixedWidth(120)
+        self._apply_slider_style(self.alien4_scan_slider, COLOR_COL4)
+        self.alien4_scan_slider.setMinimum(0)
+        self.alien4_scan_slider.setMaximum(100)
+        self.alien4_scan_slider.setValue(0)
+        self.alien4_scan_slider.valueChanged.connect(self._on_alien4_scan_changed)
+        self._make_slider_learnable(self.alien4_scan_slider, "alien4_scan", self._on_alien4_scan_changed)
+        self.alien4_scan_label = QLabel("0%")
+        self.alien4_scan_label.setFixedWidth(30)
+        row = self._create_control_row("SCAN", self.alien4_scan_slider, self.alien4_scan_label, LABEL_WIDTH)
         col4_layout.addLayout(row)
 
-        # Delay Time R
-        self.er_delay_time_r_slider = QSlider(Qt.Orientation.Horizontal)
-        self.er_delay_time_r_slider.setFixedHeight(16)
-        self.er_delay_time_r_slider.setFixedWidth(120)
-        self._apply_slider_style(self.er_delay_time_r_slider, COLOR_COL4)
-        self.er_delay_time_r_slider.setMinimum(1)
-        self.er_delay_time_r_slider.setMaximum(2000)
-        self.er_delay_time_r_slider.setValue(300)  # Slightly slower
-        self.er_delay_time_r_slider.valueChanged.connect(self._on_er_delay_time_r_changed)
-        self._make_slider_learnable(self.er_delay_time_r_slider, "er_delay_time_r", self._on_er_delay_time_r_changed)
-        self.er_delay_time_r_label = QLabel("0.30s")
-        self.er_delay_time_r_label.setFixedWidth(35)
-        row = self._create_control_row("Delay Time R", self.er_delay_time_r_slider, self.er_delay_time_r_label, LABEL_WIDTH)
+        # LENGTH (Slice length, 0.05-5.0s)
+        self.alien4_length_slider = QSlider(Qt.Orientation.Horizontal)
+        self.alien4_length_slider.setFixedHeight(16)
+        self.alien4_length_slider.setFixedWidth(120)
+        self._apply_slider_style(self.alien4_length_slider, COLOR_COL4)
+        self.alien4_length_slider.setMinimum(0)
+        self.alien4_length_slider.setMaximum(100)
+        self.alien4_length_slider.setValue(50)  # Default to 0.5 → ~0.5s slice length
+        self.alien4_length_slider.valueChanged.connect(self._on_alien4_length_changed)
+        self._make_slider_learnable(self.alien4_length_slider, "alien4_length", self._on_alien4_length_changed)
+        self.alien4_length_label = QLabel("0.50s")
+        self.alien4_length_label.setFixedWidth(35)
+        row = self._create_control_row("LEN", self.alien4_length_slider, self.alien4_length_label, LABEL_WIDTH)
         col4_layout.addLayout(row)
 
-        # Delay FB
-        self.er_delay_fb_slider = QSlider(Qt.Orientation.Horizontal)
-        self.er_delay_fb_slider.setFixedHeight(16)
-        self.er_delay_fb_slider.setFixedWidth(120)
-        self._apply_slider_style(self.er_delay_fb_slider, COLOR_COL4)
-        self.er_delay_fb_slider.setMinimum(0)
-        self.er_delay_fb_slider.setMaximum(95)
-        self.er_delay_fb_slider.setValue(30)
-        self.er_delay_fb_slider.valueChanged.connect(self._on_er_delay_fb_changed)
-        self._make_slider_learnable(self.er_delay_fb_slider, "er_delay_fb", self._on_er_delay_fb_changed)
-        self.er_delay_fb_label = QLabel("0.30")
-        self.er_delay_fb_label.setFixedWidth(30)
-        row = self._create_control_row("Delay FB", self.er_delay_fb_slider, self.er_delay_fb_label, LABEL_WIDTH)
+        # MIX (Input/Loop mix, 0-100%)
+        self.alien4_mix_slider = QSlider(Qt.Orientation.Horizontal)
+        self.alien4_mix_slider.setFixedHeight(16)
+        self.alien4_mix_slider.setFixedWidth(120)
+        self._apply_slider_style(self.alien4_mix_slider, COLOR_COL4)
+        self.alien4_mix_slider.setMinimum(0)
+        self.alien4_mix_slider.setMaximum(100)
+        self.alien4_mix_slider.setValue(0)
+        self.alien4_mix_slider.valueChanged.connect(self._on_alien4_mix_changed)
+        self._make_slider_learnable(self.alien4_mix_slider, "alien4_mix", self._on_alien4_mix_changed)
+        self.alien4_mix_label = QLabel("0.00")
+        self.alien4_mix_label.setFixedWidth(30)
+        row = self._create_control_row("MIX", self.alien4_mix_slider, self.alien4_mix_label, LABEL_WIDTH)
         col4_layout.addLayout(row)
 
-        # Delay Mix
-        self.er_delay_mix_slider = QSlider(Qt.Orientation.Horizontal)
-        self.er_delay_mix_slider.setFixedHeight(16)
-        self.er_delay_mix_slider.setFixedWidth(120)
-        self._apply_slider_style(self.er_delay_mix_slider, COLOR_COL4)
-        self.er_delay_mix_slider.setMinimum(0)
-        self.er_delay_mix_slider.setMaximum(100)
-        self.er_delay_mix_slider.setValue(0)
-        self.er_delay_mix_slider.valueChanged.connect(self._on_er_delay_mix_changed)
-        self._make_slider_learnable(self.er_delay_mix_slider, "er_delay_mix", self._on_er_delay_mix_changed)
-        self.er_delay_mix_label = QLabel("0.00")
-        self.er_delay_mix_label.setFixedWidth(30)
-        row = self._create_control_row("Dly Mix", self.er_delay_mix_slider, self.er_delay_mix_label, LABEL_WIDTH)
+        # FDBK (Feedback, 0-80%)
+        self.alien4_fdbk_slider = QSlider(Qt.Orientation.Horizontal)
+        self.alien4_fdbk_slider.setFixedHeight(16)
+        self.alien4_fdbk_slider.setFixedWidth(120)
+        self._apply_slider_style(self.alien4_fdbk_slider, COLOR_COL4)
+        self.alien4_fdbk_slider.setMinimum(0)
+        self.alien4_fdbk_slider.setMaximum(80)
+        self.alien4_fdbk_slider.setValue(0)
+        self.alien4_fdbk_slider.valueChanged.connect(self._on_alien4_fdbk_changed)
+        self._make_slider_learnable(self.alien4_fdbk_slider, "alien4_fdbk", self._on_alien4_fdbk_changed)
+        self.alien4_fdbk_label = QLabel("0.00")
+        self.alien4_fdbk_label.setFixedWidth(30)
+        row = self._create_control_row("FDBK", self.alien4_fdbk_slider, self.alien4_fdbk_label, LABEL_WIDTH)
         col4_layout.addLayout(row)
 
-        # Grain Size
-        self.er_grain_size_slider = QSlider(Qt.Orientation.Horizontal)
-        self.er_grain_size_slider.setFixedHeight(16)
-        self.er_grain_size_slider.setFixedWidth(120)
-        self._apply_slider_style(self.er_grain_size_slider, COLOR_COL4)
-        self.er_grain_size_slider.setMinimum(0)
-        self.er_grain_size_slider.setMaximum(100)
-        self.er_grain_size_slider.setValue(50)  # Default to 50%
-        self.er_grain_size_slider.valueChanged.connect(self._on_er_grain_size_changed)
-        self._make_slider_learnable(self.er_grain_size_slider, "er_grain_size", self._on_er_grain_size_changed)
-        self.er_grain_size_label = QLabel("0.50")
-        self.er_grain_size_label.setFixedWidth(30)
-        row = self._create_control_row("Grain Size", self.er_grain_size_slider, self.er_grain_size_label, LABEL_WIDTH)
+        # EQ Low (0 to -20 dB, cut only)
+        self.alien4_eq_low_slider = QSlider(Qt.Orientation.Horizontal)
+        self.alien4_eq_low_slider.setFixedHeight(16)
+        self.alien4_eq_low_slider.setFixedWidth(120)
+        self._apply_slider_style(self.alien4_eq_low_slider, COLOR_COL4)
+        self.alien4_eq_low_slider.setMinimum(-20)
+        self.alien4_eq_low_slider.setMaximum(0)
+        self.alien4_eq_low_slider.setValue(0)
+        self.alien4_eq_low_slider.valueChanged.connect(self._on_alien4_eq_low_changed)
+        self._make_slider_learnable(self.alien4_eq_low_slider, "alien4_eq_low", self._on_alien4_eq_low_changed)
+        self.alien4_eq_low_label = QLabel("0dB")
+        self.alien4_eq_low_label.setFixedWidth(35)
+        row = self._create_control_row("EQ Low", self.alien4_eq_low_slider, self.alien4_eq_low_label, LABEL_WIDTH)
         col4_layout.addLayout(row)
 
-        # Grain Density
-        self.er_grain_density_slider = QSlider(Qt.Orientation.Horizontal)
-        self.er_grain_density_slider.setFixedHeight(16)
-        self.er_grain_density_slider.setFixedWidth(120)
-        self._apply_slider_style(self.er_grain_density_slider, COLOR_COL4)
-        self.er_grain_density_slider.setMinimum(0)
-        self.er_grain_density_slider.setMaximum(100)
-        self.er_grain_density_slider.setValue(40)
-        self.er_grain_density_slider.valueChanged.connect(self._on_er_grain_density_changed)
-        self._make_slider_learnable(self.er_grain_density_slider, "er_grain_density", self._on_er_grain_density_changed)
-        self.er_grain_density_label = QLabel("0.40")
-        self.er_grain_density_label.setFixedWidth(30)
-        row = self._create_control_row("Grain Density", self.er_grain_density_slider, self.er_grain_density_label, LABEL_WIDTH)
+        # EQ Mid (0 to -20 dB, cut only)
+        self.alien4_eq_mid_slider = QSlider(Qt.Orientation.Horizontal)
+        self.alien4_eq_mid_slider.setFixedHeight(16)
+        self.alien4_eq_mid_slider.setFixedWidth(120)
+        self._apply_slider_style(self.alien4_eq_mid_slider, COLOR_COL4)
+        self.alien4_eq_mid_slider.setMinimum(-20)
+        self.alien4_eq_mid_slider.setMaximum(0)
+        self.alien4_eq_mid_slider.setValue(0)
+        self.alien4_eq_mid_slider.valueChanged.connect(self._on_alien4_eq_mid_changed)
+        self._make_slider_learnable(self.alien4_eq_mid_slider, "alien4_eq_mid", self._on_alien4_eq_mid_changed)
+        self.alien4_eq_mid_label = QLabel("0dB")
+        self.alien4_eq_mid_label.setFixedWidth(35)
+        row = self._create_control_row("EQ Mid", self.alien4_eq_mid_slider, self.alien4_eq_mid_label, LABEL_WIDTH)
         col4_layout.addLayout(row)
 
-        # Grain Position
-        self.er_grain_pos_slider = QSlider(Qt.Orientation.Horizontal)
-        self.er_grain_pos_slider.setFixedHeight(16)
-        self.er_grain_pos_slider.setFixedWidth(120)
-        self._apply_slider_style(self.er_grain_pos_slider, COLOR_COL4)
-        self.er_grain_pos_slider.setMinimum(0)
-        self.er_grain_pos_slider.setMaximum(100)
-        self.er_grain_pos_slider.setValue(50)
-        self.er_grain_pos_slider.valueChanged.connect(self._on_er_grain_pos_changed)
-        self._make_slider_learnable(self.er_grain_pos_slider, "er_grain_pos", self._on_er_grain_pos_changed)
-        self.er_grain_pos_label = QLabel("0.50")
-        self.er_grain_pos_label.setFixedWidth(30)
-        row = self._create_control_row("Grain Position", self.er_grain_pos_slider, self.er_grain_pos_label, LABEL_WIDTH)
+        # EQ High (0 to -20 dB, cut only)
+        self.alien4_eq_high_slider = QSlider(Qt.Orientation.Horizontal)
+        self.alien4_eq_high_slider.setFixedHeight(16)
+        self.alien4_eq_high_slider.setFixedWidth(120)
+        self._apply_slider_style(self.alien4_eq_high_slider, COLOR_COL4)
+        self.alien4_eq_high_slider.setMinimum(-20)
+        self.alien4_eq_high_slider.setMaximum(0)
+        self.alien4_eq_high_slider.setValue(0)
+        self.alien4_eq_high_slider.valueChanged.connect(self._on_alien4_eq_high_changed)
+        self._make_slider_learnable(self.alien4_eq_high_slider, "alien4_eq_high", self._on_alien4_eq_high_changed)
+        self.alien4_eq_high_label = QLabel("0dB")
+        self.alien4_eq_high_label.setFixedWidth(35)
+        row = self._create_control_row("EQ High", self.alien4_eq_high_slider, self.alien4_eq_high_label, LABEL_WIDTH)
         col4_layout.addLayout(row)
 
-        # Grain Mix
-        self.er_grain_mix_slider = QSlider(Qt.Orientation.Horizontal)
-        self.er_grain_mix_slider.setFixedHeight(16)
-        self.er_grain_mix_slider.setFixedWidth(120)
-        self._apply_slider_style(self.er_grain_mix_slider, COLOR_COL4)
-        self.er_grain_mix_slider.setMinimum(0)
-        self.er_grain_mix_slider.setMaximum(100)
-        self.er_grain_mix_slider.setValue(0)
-        self.er_grain_mix_slider.valueChanged.connect(self._on_er_grain_mix_changed)
-        self._make_slider_learnable(self.er_grain_mix_slider, "er_grain_mix", self._on_er_grain_mix_changed)
-        self.er_grain_mix_label = QLabel("0.00")
-        self.er_grain_mix_label.setFixedWidth(30)
-        row = self._create_control_row("Grn Mix", self.er_grain_mix_slider, self.er_grain_mix_label, LABEL_WIDTH)
+        # SPEED (Playback speed, -8x to +8x)
+        self.alien4_speed_slider = QSlider(Qt.Orientation.Horizontal)
+        self.alien4_speed_slider.setFixedHeight(16)
+        self.alien4_speed_slider.setFixedWidth(120)
+        self._apply_slider_style(self.alien4_speed_slider, COLOR_COL4)
+        self.alien4_speed_slider.setMinimum(-800)  # -8.0x * 100
+        self.alien4_speed_slider.setMaximum(800)   # +8.0x * 100
+        self.alien4_speed_slider.setValue(100)     # 1.0x
+        self.alien4_speed_slider.valueChanged.connect(self._on_alien4_speed_changed)
+        self._make_slider_learnable(self.alien4_speed_slider, "alien4_speed", self._on_alien4_speed_changed)
+        self.alien4_speed_label = QLabel("1.00x")
+        self.alien4_speed_label.setFixedWidth(35)
+        row = self._create_control_row("SPEED", self.alien4_speed_slider, self.alien4_speed_label, LABEL_WIDTH)
         col4_layout.addLayout(row)
 
-        # ===== COLUMN 5: Ellen Ripley Reverb+Chaos =====
+        # POLY (Polyphonic voices, 1-8)
+        self.alien4_poly_slider = QSlider(Qt.Orientation.Horizontal)
+        self.alien4_poly_slider.setFixedHeight(16)
+        self.alien4_poly_slider.setFixedWidth(120)
+        self._apply_slider_style(self.alien4_poly_slider, COLOR_COL4)
+        self.alien4_poly_slider.setMinimum(1)
+        self.alien4_poly_slider.setMaximum(8)
+        self.alien4_poly_slider.setValue(1)
+        self.alien4_poly_slider.valueChanged.connect(self._on_alien4_poly_changed)
+        self._make_slider_learnable(self.alien4_poly_slider, "alien4_poly", self._on_alien4_poly_changed)
+        self.alien4_poly_label = QLabel("1")
+        self.alien4_poly_label.setFixedWidth(30)
+        row = self._create_control_row("POLY", self.alien4_poly_slider, self.alien4_poly_label, LABEL_WIDTH)
+        col4_layout.addLayout(row)
 
-        # Reverb Room
-        self.er_reverb_room_slider = QSlider(Qt.Orientation.Horizontal)
-        self.er_reverb_room_slider.setFixedHeight(16)
-        self.er_reverb_room_slider.setFixedWidth(120)
-        self._apply_slider_style(self.er_reverb_room_slider, COLOR_COL4)
-        self.er_reverb_room_slider.setMinimum(0)
-        self.er_reverb_room_slider.setMaximum(100)
-        self.er_reverb_room_slider.setValue(100)  # Default to maximum
-        self.er_reverb_room_slider.valueChanged.connect(self._on_er_reverb_room_changed)
-        self._make_slider_learnable(self.er_reverb_room_slider, "er_reverb_room", self._on_er_reverb_room_changed)
-        self.er_reverb_room_label = QLabel("1.00")
-        self.er_reverb_room_label.setFixedWidth(30)
-        row = self._create_control_row("Reverb Room", self.er_reverb_room_slider, self.er_reverb_room_label, LABEL_WIDTH)
+        # ===== COLUMN 5: Alien4 Delay+Reverb =====
+
+        # Delay Time L (0.001-2.0s)
+        self.alien4_delay_time_l_slider = QSlider(Qt.Orientation.Horizontal)
+        self.alien4_delay_time_l_slider.setFixedHeight(16)
+        self.alien4_delay_time_l_slider.setFixedWidth(120)
+        self._apply_slider_style(self.alien4_delay_time_l_slider, COLOR_COL4)
+        self.alien4_delay_time_l_slider.setMinimum(1)  # 0.001s
+        self.alien4_delay_time_l_slider.setMaximum(2000)  # 2.0s
+        self.alien4_delay_time_l_slider.setValue(250)  # 0.25s
+        self.alien4_delay_time_l_slider.valueChanged.connect(self._on_alien4_delay_time_l_changed)
+        self._make_slider_learnable(self.alien4_delay_time_l_slider, "alien4_delay_time_l", self._on_alien4_delay_time_l_changed)
+        self.alien4_delay_time_l_label = QLabel("0.25s")
+        self.alien4_delay_time_l_label.setFixedWidth(35)
+        row = self._create_control_row("Delay Time L", self.alien4_delay_time_l_slider, self.alien4_delay_time_l_label, LABEL_WIDTH)
         col5_layout.addLayout(row)
 
-        # Reverb Damping
-        self.er_reverb_damp_slider = QSlider(Qt.Orientation.Horizontal)
-        self.er_reverb_damp_slider.setFixedHeight(16)
-        self.er_reverb_damp_slider.setFixedWidth(120)
-        self._apply_slider_style(self.er_reverb_damp_slider, COLOR_COL4)
-        self.er_reverb_damp_slider.setMinimum(0)
-        self.er_reverb_damp_slider.setMaximum(100)
-        self.er_reverb_damp_slider.setValue(100)  # Default to maximum
-        self.er_reverb_damp_slider.valueChanged.connect(self._on_er_reverb_damp_changed)
-        self._make_slider_learnable(self.er_reverb_damp_slider, "er_reverb_damp", self._on_er_reverb_damp_changed)
-        self.er_reverb_damp_label = QLabel("1.00")
-        self.er_reverb_damp_label.setFixedWidth(30)
-        row = self._create_control_row("Reverb Damp", self.er_reverb_damp_slider, self.er_reverb_damp_label, LABEL_WIDTH)
+        # Delay Time R (0.001-2.0s)
+        self.alien4_delay_time_r_slider = QSlider(Qt.Orientation.Horizontal)
+        self.alien4_delay_time_r_slider.setFixedHeight(16)
+        self.alien4_delay_time_r_slider.setFixedWidth(120)
+        self._apply_slider_style(self.alien4_delay_time_r_slider, COLOR_COL4)
+        self.alien4_delay_time_r_slider.setMinimum(1)  # 0.001s
+        self.alien4_delay_time_r_slider.setMaximum(2000)  # 2.0s
+        self.alien4_delay_time_r_slider.setValue(300)  # 0.30s
+        self.alien4_delay_time_r_slider.valueChanged.connect(self._on_alien4_delay_time_r_changed)
+        self._make_slider_learnable(self.alien4_delay_time_r_slider, "alien4_delay_time_r", self._on_alien4_delay_time_r_changed)
+        self.alien4_delay_time_r_label = QLabel("0.30s")
+        self.alien4_delay_time_r_label.setFixedWidth(35)
+        row = self._create_control_row("Delay Time R", self.alien4_delay_time_r_slider, self.alien4_delay_time_r_label, LABEL_WIDTH)
         col5_layout.addLayout(row)
 
-        # Reverb Decay
-        self.er_reverb_decay_slider = QSlider(Qt.Orientation.Horizontal)
-        self.er_reverb_decay_slider.setFixedHeight(16)
-        self.er_reverb_decay_slider.setFixedWidth(120)
-        self._apply_slider_style(self.er_reverb_decay_slider, COLOR_COL4)
-        self.er_reverb_decay_slider.setMinimum(0)
-        self.er_reverb_decay_slider.setMaximum(100)
-        self.er_reverb_decay_slider.setValue(80)  # Default to 80%
-        self.er_reverb_decay_slider.valueChanged.connect(self._on_er_reverb_decay_changed)
-        self._make_slider_learnable(self.er_reverb_decay_slider, "er_reverb_decay", self._on_er_reverb_decay_changed)
-        self.er_reverb_decay_label = QLabel("0.80")
-        self.er_reverb_decay_label.setFixedWidth(30)
-        row = self._create_control_row("Reverb Decay", self.er_reverb_decay_slider, self.er_reverb_decay_label, LABEL_WIDTH)
+        # Delay FB (0-95%)
+        self.alien4_delay_fb_slider = QSlider(Qt.Orientation.Horizontal)
+        self.alien4_delay_fb_slider.setFixedHeight(16)
+        self.alien4_delay_fb_slider.setFixedWidth(120)
+        self._apply_slider_style(self.alien4_delay_fb_slider, COLOR_COL4)
+        self.alien4_delay_fb_slider.setMinimum(0)
+        self.alien4_delay_fb_slider.setMaximum(95)
+        self.alien4_delay_fb_slider.setValue(30)
+        self.alien4_delay_fb_slider.valueChanged.connect(self._on_alien4_delay_fb_changed)
+        self._make_slider_learnable(self.alien4_delay_fb_slider, "alien4_delay_fb", self._on_alien4_delay_fb_changed)
+        self.alien4_delay_fb_label = QLabel("30%")
+        self.alien4_delay_fb_label.setFixedWidth(30)
+        row = self._create_control_row("Delay FB", self.alien4_delay_fb_slider, self.alien4_delay_fb_label, LABEL_WIDTH)
         col5_layout.addLayout(row)
 
-        # Reverb Mix
-        self.er_reverb_mix_slider = QSlider(Qt.Orientation.Horizontal)
-        self.er_reverb_mix_slider.setFixedHeight(16)
-        self.er_reverb_mix_slider.setFixedWidth(120)
-        self._apply_slider_style(self.er_reverb_mix_slider, COLOR_COL4)
-        self.er_reverb_mix_slider.setMinimum(0)
-        self.er_reverb_mix_slider.setMaximum(100)
-        self.er_reverb_mix_slider.setValue(0)
-        self.er_reverb_mix_slider.valueChanged.connect(self._on_er_reverb_mix_changed)
-        self._make_slider_learnable(self.er_reverb_mix_slider, "er_reverb_mix", self._on_er_reverb_mix_changed)
-        self.er_reverb_mix_label = QLabel("0.00")
-        self.er_reverb_mix_label.setFixedWidth(30)
-        row = self._create_control_row("Rev Mix", self.er_reverb_mix_slider, self.er_reverb_mix_label, LABEL_WIDTH)
+        # Delay Wet (0-100%)
+        self.alien4_delay_wet_slider = QSlider(Qt.Orientation.Horizontal)
+        self.alien4_delay_wet_slider.setFixedHeight(16)
+        self.alien4_delay_wet_slider.setFixedWidth(120)
+        self._apply_slider_style(self.alien4_delay_wet_slider, COLOR_COL4)
+        self.alien4_delay_wet_slider.setMinimum(0)
+        self.alien4_delay_wet_slider.setMaximum(100)
+        self.alien4_delay_wet_slider.setValue(0)
+        self.alien4_delay_wet_slider.valueChanged.connect(self._on_alien4_delay_wet_changed)
+        self._make_slider_learnable(self.alien4_delay_wet_slider, "alien4_delay_wet", self._on_alien4_delay_wet_changed)
+        self.alien4_delay_wet_label = QLabel("0%")
+        self.alien4_delay_wet_label.setFixedWidth(30)
+        row = self._create_control_row("Delay Wet", self.alien4_delay_wet_slider, self.alien4_delay_wet_label, LABEL_WIDTH)
         col5_layout.addLayout(row)
 
-        # Chaos Rate
-        self.er_chaos_rate_slider = QSlider(Qt.Orientation.Horizontal)
-        self.er_chaos_rate_slider.setFixedHeight(16)
-        self.er_chaos_rate_slider.setFixedWidth(120)
-        self._apply_slider_style(self.er_chaos_rate_slider, COLOR_COL4)
-        self.er_chaos_rate_slider.setMinimum(0)
-        self.er_chaos_rate_slider.setMaximum(100)
-        self.er_chaos_rate_slider.setValue(1)
-        self.er_chaos_rate_slider.valueChanged.connect(self._on_er_chaos_rate_changed)
-        self._make_slider_learnable(self.er_chaos_rate_slider, "er_chaos_rate", self._on_er_chaos_rate_changed)
-        self.er_chaos_rate_label = QLabel("0.01")
-        self.er_chaos_rate_label.setFixedWidth(30)
-        row = self._create_control_row("Chaos Rate", self.er_chaos_rate_slider, self.er_chaos_rate_label, LABEL_WIDTH)
+        # Reverb Decay (0-100%)
+        self.alien4_reverb_decay_slider = QSlider(Qt.Orientation.Horizontal)
+        self.alien4_reverb_decay_slider.setFixedHeight(16)
+        self.alien4_reverb_decay_slider.setFixedWidth(120)
+        self._apply_slider_style(self.alien4_reverb_decay_slider, COLOR_COL4)
+        self.alien4_reverb_decay_slider.setMinimum(0)
+        self.alien4_reverb_decay_slider.setMaximum(100)
+        self.alien4_reverb_decay_slider.setValue(80)
+        self.alien4_reverb_decay_slider.valueChanged.connect(self._on_alien4_reverb_decay_changed)
+        self._make_slider_learnable(self.alien4_reverb_decay_slider, "alien4_reverb_decay", self._on_alien4_reverb_decay_changed)
+        self.alien4_reverb_decay_label = QLabel("80%")
+        self.alien4_reverb_decay_label.setFixedWidth(30)
+        row = self._create_control_row("Reverb Decay", self.alien4_reverb_decay_slider, self.alien4_reverb_decay_label, LABEL_WIDTH)
         col5_layout.addLayout(row)
 
-        # Chaos Amount
-        self.er_chaos_amount_slider = QSlider(Qt.Orientation.Horizontal)
-        self.er_chaos_amount_slider.setFixedHeight(16)
-        self.er_chaos_amount_slider.setFixedWidth(120)
-        self._apply_slider_style(self.er_chaos_amount_slider, COLOR_COL4)
-        self.er_chaos_amount_slider.setMinimum(0)
-        self.er_chaos_amount_slider.setMaximum(100)
-        self.er_chaos_amount_slider.setValue(100)
-        self.er_chaos_amount_slider.valueChanged.connect(self._on_er_chaos_amount_changed)
-        self._make_slider_learnable(self.er_chaos_amount_slider, "er_chaos_amount", self._on_er_chaos_amount_changed)
-        self.er_chaos_amount_label = QLabel("1.00")
-        self.er_chaos_amount_label.setFixedWidth(30)
-        row = self._create_control_row("Chaos Amount", self.er_chaos_amount_slider, self.er_chaos_amount_label, LABEL_WIDTH)
+        # Reverb Wet (0-100%)
+        self.alien4_reverb_wet_slider = QSlider(Qt.Orientation.Horizontal)
+        self.alien4_reverb_wet_slider.setFixedHeight(16)
+        self.alien4_reverb_wet_slider.setFixedWidth(120)
+        self._apply_slider_style(self.alien4_reverb_wet_slider, COLOR_COL4)
+        self.alien4_reverb_wet_slider.setMinimum(0)
+        self.alien4_reverb_wet_slider.setMaximum(100)
+        self.alien4_reverb_wet_slider.setValue(0)
+        self.alien4_reverb_wet_slider.valueChanged.connect(self._on_alien4_reverb_wet_changed)
+        self._make_slider_learnable(self.alien4_reverb_wet_slider, "alien4_reverb_wet", self._on_alien4_reverb_wet_changed)
+        self.alien4_reverb_wet_label = QLabel("0%")
+        self.alien4_reverb_wet_label.setFixedWidth(30)
+        row = self._create_control_row("Reverb Wet", self.alien4_reverb_wet_slider, self.alien4_reverb_wet_label, LABEL_WIDTH)
         col5_layout.addLayout(row)
-
-        # Chaos toggles in two rows
-        # First row: Delay Chaos, Grain Chaos
-        chaos_row1_layout = QHBoxLayout()
-        chaos_row1_layout.setSpacing(5)
-        chaos_row1_layout.setContentsMargins(0, 0, 0, 0)
-
-        self.er_delay_chaos_checkbox = QCheckBox("Dly Chaos")
-        self.er_delay_chaos_checkbox.setFixedHeight(16)
-        self.er_delay_chaos_checkbox.stateChanged.connect(self._on_er_delay_chaos_changed)
-        chaos_row1_layout.addWidget(self.er_delay_chaos_checkbox)
-
-        self.er_grain_chaos_checkbox = QCheckBox("Grn Chaos")
-        self.er_grain_chaos_checkbox.setFixedHeight(16)
-        self.er_grain_chaos_checkbox.setChecked(True)  # Default ON
-        self.er_grain_chaos_checkbox.stateChanged.connect(self._on_er_grain_chaos_changed)
-        chaos_row1_layout.addWidget(self.er_grain_chaos_checkbox)
-
-        chaos_row1_layout.addStretch()
-
-        col5_layout.addLayout(chaos_row1_layout)
-
-        # Second row: Reverb Chaos, Chaos Shape
-        chaos_row2_layout = QHBoxLayout()
-        chaos_row2_layout.setSpacing(5)
-        chaos_row2_layout.setContentsMargins(0, 0, 0, 0)
-
-        self.er_reverb_chaos_checkbox = QCheckBox("Rev Chaos")
-        self.er_reverb_chaos_checkbox.setFixedHeight(16)
-        self.er_reverb_chaos_checkbox.stateChanged.connect(self._on_er_reverb_chaos_changed)
-        chaos_row2_layout.addWidget(self.er_reverb_chaos_checkbox)
-
-        self.er_chaos_shape_checkbox = QCheckBox("Chaos Shape")
-        self.er_chaos_shape_checkbox.setFixedHeight(16)
-        self.er_chaos_shape_checkbox.stateChanged.connect(self._on_er_chaos_shape_changed)
-        chaos_row2_layout.addWidget(self.er_chaos_shape_checkbox)
-
-        chaos_row2_layout.addStretch()
-
-        col5_layout.addLayout(chaos_row2_layout)
 
         # Add all column layouts to the horizontal box
         hbox.addLayout(col1_layout)
@@ -1298,6 +1290,7 @@ class CompactMainWindow(QMainWindow):
         current_devices = {
             'audio_input': self.controller.audio_io.input_device,
             'audio_output': self.controller.audio_io.output_device,
+            'buffer_size': self.controller.audio_io.buffer_size,
             'camera_input': self.controller.camera.device_id,
             'camera_output': None,
         }
@@ -1317,13 +1310,18 @@ class CompactMainWindow(QMainWindow):
 
             # Apply device changes
             try:
-                # Set audio devices (will auto-restart stream if running)
-                if devices['audio_input'] is not None or devices['audio_output'] is not None:
-                    print(f"Setting audio devices: in={devices['audio_input']}, out={devices['audio_output']}")
+                # Set audio devices and buffer size (will auto-restart stream if running)
+                if devices['audio_input'] is not None or devices['audio_output'] is not None or devices['buffer_size'] is not None:
+                    print(f"Setting audio devices: in={devices['audio_input']}, out={devices['audio_output']}, buffer={devices['buffer_size']}")
                     self.controller.audio_io.set_devices(
                         input_device=devices['audio_input'],
                         output_device=devices['audio_output'],
+                        buffer_size=devices['buffer_size'],
                     )
+
+                    # Update controller's buffer_size reference
+                    if devices['buffer_size'] is not None:
+                        self.controller.buffer_size = devices['buffer_size']
 
                 # Set camera device (just update device_id, don't open yet)
                 # controller.start() will handle opening the camera
@@ -1590,6 +1588,114 @@ class CompactMainWindow(QMainWindow):
         shape = state == 2
         self.controller.set_ellen_ripley_chaos_params(shape=shape)
 
+    # Alien4 event handlers
+    def _on_alien4_rec_toggle(self):
+        """Toggle Alien4 recording"""
+        enabled = self.alien4_rec_button.isChecked()
+        self.controller.set_alien4_recording(enabled)
+        self.status_label.setText(f"Alien4 REC: {'ON' if enabled else 'OFF'}")
+
+    def _on_alien4_scan_changed(self, value: int):
+        """Alien4 scan changed"""
+        scan = value / 100.0
+        self.alien4_scan_label.setText(f"{value}%")
+        self.controller.set_alien4_scan(scan)
+
+    def _on_alien4_length_changed(self, value: int):
+        """Alien4 slice length changed (0.001-5.0s)"""
+        # Convert 0-100 slider to 0.0-1.0 knob value
+        knob_value = value / 100.0
+
+        # Calculate actual slice length for display (0.001-5.0s)
+        # Exponential: 0.001 * 5000^knob_value
+        slice_length = 0.001 * pow(5000.0, knob_value)
+
+        # Display slice length
+        if slice_length < 0.01:
+            self.alien4_length_label.setText(f"{slice_length*1000:.1f}ms")
+        elif slice_length < 1.0:
+            self.alien4_length_label.setText(f"{slice_length:.2f}s")
+        else:
+            self.alien4_length_label.setText(f"{slice_length:.1f}s")
+
+        # Send knob value to engine
+        self.controller.set_alien4_gate_threshold(knob_value)
+
+    def _on_alien4_mix_changed(self, value: int):
+        """Alien4 loop mix changed"""
+        mix = value / 100.0
+        self.alien4_mix_label.setText(f"{mix:.2f}")
+        self.controller.set_alien4_documenta_params(mix=mix)
+
+    def _on_alien4_fdbk_changed(self, value: int):
+        """Alien4 feedback changed (slider 0-80 maps to 0.0-0.8)"""
+        # Map 0-80 to 0.0-0.8
+        fdbk = value / 100.0  # 0-80 → 0.0-0.8
+        self.alien4_fdbk_label.setText(f"{fdbk:.2f}")
+        self.controller.set_alien4_documenta_params(feedback=fdbk)
+
+    def _on_alien4_eq_low_changed(self, value: int):
+        """Alien4 EQ Low changed"""
+        self.alien4_eq_low_label.setText(f"{value}dB")
+        self.controller.set_alien4_documenta_params(eq_low=float(value))
+
+    def _on_alien4_eq_mid_changed(self, value: int):
+        """Alien4 EQ Mid changed"""
+        self.alien4_eq_mid_label.setText(f"{value}dB")
+        self.controller.set_alien4_documenta_params(eq_mid=float(value))
+
+    def _on_alien4_eq_high_changed(self, value: int):
+        """Alien4 EQ High changed"""
+        self.alien4_eq_high_label.setText(f"{value}dB")
+        self.controller.set_alien4_documenta_params(eq_high=float(value))
+
+    def _on_alien4_speed_changed(self, value: int):
+        """Alien4 speed changed"""
+        speed = value / 100.0
+        self.alien4_speed_label.setText(f"{speed:.2f}x")
+        self.controller.set_alien4_documenta_params(speed=speed)
+
+    def _on_alien4_delay_time_l_changed(self, value: int):
+        """Alien4 delay time L changed"""
+        time_s = value / 1000.0
+        self.alien4_delay_time_l_label.setText(f"{time_s:.2f}s")
+        self.controller.set_alien4_delay_params(time_l=time_s)
+
+    def _on_alien4_delay_time_r_changed(self, value: int):
+        """Alien4 delay time R changed"""
+        time_s = value / 1000.0
+        self.alien4_delay_time_r_label.setText(f"{time_s:.2f}s")
+        self.controller.set_alien4_delay_params(time_r=time_s)
+
+    def _on_alien4_delay_fb_changed(self, value: int):
+        """Alien4 delay feedback changed"""
+        fb = value / 100.0
+        self.alien4_delay_fb_label.setText(f"{value}%")
+        self.controller.set_alien4_delay_params(feedback=fb)
+
+    def _on_alien4_delay_wet_changed(self, value: int):
+        """Alien4 delay wet changed"""
+        wet = value / 100.0
+        self.alien4_delay_wet_label.setText(f"{value}%")
+        self.controller.set_alien4_delay_params(wet_dry=wet)
+
+    def _on_alien4_reverb_decay_changed(self, value: int):
+        """Alien4 reverb decay changed"""
+        decay = value / 100.0
+        self.alien4_reverb_decay_label.setText(f"{value}%")
+        self.controller.set_alien4_reverb_params(decay=decay)
+
+    def _on_alien4_reverb_wet_changed(self, value: int):
+        """Alien4 reverb wet changed"""
+        wet = value / 100.0
+        self.alien4_reverb_wet_label.setText(f"{value}%")
+        self.controller.set_alien4_reverb_params(wet_dry=wet)
+
+    def _on_alien4_poly_changed(self, value: int):
+        """Alien4 poly voices changed"""
+        self.alien4_poly_label.setText(f"{value}")
+        self.controller.set_alien4_documenta_params(poly=value)
+
     # SD img2img controls
     def _on_sd_toggle(self, state: int):
         """SD img2img enable/disable"""
@@ -1779,6 +1885,15 @@ class CompactMainWindow(QMainWindow):
         """Update CV Meter Window with new CV values"""
         if self.cv_meter_window:
             self.cv_meter_window.update_values(cv_values)
+
+        # Update Alien4 Scan slider from Seq1 (cv_values[4])
+        if len(cv_values) > 4:
+            seq1_value = cv_values[4]
+            # Block signals to prevent feedback loop
+            self.alien4_scan_slider.blockSignals(True)
+            self.alien4_scan_slider.setValue(int(seq1_value * 100))
+            self.alien4_scan_label.setText(f"{int(seq1_value * 100)}%")
+            self.alien4_scan_slider.blockSignals(False)
 
     def _update_visual_display(self, visual_params: dict):
         pass

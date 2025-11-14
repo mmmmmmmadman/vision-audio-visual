@@ -18,7 +18,8 @@ if sys.platform == 'darwin':
 
 from .io import AudioIO
 from .mixer import StereoMixer
-from .effects.ellen_ripley import EllenRipleyEffectChain
+# from .effects.ellen_ripley import EllenRipleyEffectChain
+from .alien4_wrapper import Alien4EffectChain
 from ..cv_generator.envelope import DecayEnvelope
 
 
@@ -85,11 +86,12 @@ def audio_process_worker(
 
     # 初始化其他組件
     mixer = StereoMixer(num_channels=4)
-    ellen_ripley = EllenRipleyEffectChain(sample_rate=sample_rate)
+    # ellen_ripley = EllenRipleyEffectChain(sample_rate=sample_rate)
+    alien4 = Alien4EffectChain(sample_rate=sample_rate)
 
-    # Pre-warm Numba JIT
+    # Pre-warm
     dummy_audio = np.zeros((256, 2), dtype=np.float32)
-    _ = ellen_ripley.process(dummy_audio[:, 0], dummy_audio[:, 1])
+    _ = alien4.process(dummy_audio[:, 0], dummy_audio[:, 1])
 
     # CV generators (4 envelopes: ENV1-4)
     envelopes = []
@@ -135,7 +137,7 @@ def audio_process_worker(
                         channel_levels[channel] = level
 
                 elif msg_type == 'set_ellen_ripley_delay':
-                    ellen_ripley.set_delay_params(
+                    alien4.set_delay_params(
                         time_l=msg.get('time_l'),
                         time_r=msg.get('time_r'),
                         feedback=msg.get('feedback'),
@@ -144,7 +146,7 @@ def audio_process_worker(
                     )
 
                 elif msg_type == 'set_ellen_ripley_grain':
-                    ellen_ripley.set_grain_params(
+                    alien4.set_grain_params(
                         size=msg.get('size'),
                         density=msg.get('density'),
                         position=msg.get('position'),
@@ -153,7 +155,7 @@ def audio_process_worker(
                     )
 
                 elif msg_type == 'set_ellen_ripley_reverb':
-                    ellen_ripley.set_reverb_params(
+                    alien4.set_reverb_params(
                         room_size=msg.get('room_size'),
                         damping=msg.get('damping'),
                         decay=msg.get('decay'),
@@ -162,11 +164,47 @@ def audio_process_worker(
                     )
 
                 elif msg_type == 'set_ellen_ripley_chaos':
-                    ellen_ripley.set_chaos_params(
+                    alien4.set_chaos_params(
                         rate=msg.get('rate'),
                         amount=msg.get('amount'),
                         shape=msg.get('shape')
                     )
+
+                # Alien4 控制訊息
+                elif msg_type == 'set_alien4_documenta':
+                    alien4.set_documenta_params(
+                        mix=msg.get('mix'),
+                        feedback=msg.get('feedback'),
+                        speed=msg.get('speed'),
+                        eq_low=msg.get('eq_low'),
+                        eq_mid=msg.get('eq_mid'),
+                        eq_high=msg.get('eq_high'),
+                        poly=msg.get('poly')
+                    )
+
+                elif msg_type == 'set_alien4_recording':
+                    alien4.set_recording(msg.get('enabled'))
+
+                elif msg_type == 'set_alien4_delay':
+                    alien4.set_delay_params(
+                        time_l=msg.get('time_l'),
+                        time_r=msg.get('time_r'),
+                        feedback=msg.get('feedback'),
+                        wet_dry=msg.get('wet_dry')
+                    )
+
+                elif msg_type == 'set_alien4_reverb':
+                    alien4.set_reverb_params(
+                        decay=msg.get('decay'),
+                        wet_dry=msg.get('wet_dry')
+                    )
+
+                elif msg_type == 'set_alien4_scan':
+                    alien4.set_scan(msg.get('value'))
+
+                elif msg_type == 'set_alien4_gate_threshold':
+                    alien4.set_gate_threshold(msg.get('value'))
+
         except:
             pass
 
@@ -260,8 +298,11 @@ def audio_process_worker(
 
         master_left, master_right = mixer.process(track_inputs)
 
-        # Process through Ellen Ripley (returns 3 values: left, right, chaos_cv)
-        processed_left, processed_right, _ = ellen_ripley.process(master_left, master_right)
+        # Seq1 controls Alien4 Scan position (0.0-1.0 voltage directly maps to scan)
+        alien4.set_scan(seq1_value)
+
+        # Process through Alien4 (returns 3 values: left, right, chaos_cv)
+        processed_left, processed_right, _ = alien4.process(master_left, master_right)
 
         # Fill audio outputs (L/R) in outdata (CV已經在上面的loop中填充)
         outdata[:, 0] = processed_left  # Audio L
@@ -512,6 +553,96 @@ class AudioProcess:
                 'rate': rate,
                 'amount': amount,
                 'shape': shape
+            }
+            self.control_queue.put_nowait(msg)
+        except:
+            pass
+
+    # Alien4 控制方法
+    def set_alien4_documenta_params(self, mix=None, feedback=None, speed=None,
+                                   eq_low=None, eq_mid=None, eq_high=None, poly=None):
+        """設定 Alien4 Documenta (Loop+EQ) 參數"""
+        if not self.running:
+            return
+        try:
+            msg = {
+                'type': 'set_alien4_documenta',
+                'mix': mix,
+                'feedback': feedback,
+                'speed': speed,
+                'eq_low': eq_low,
+                'eq_mid': eq_mid,
+                'eq_high': eq_high,
+                'poly': poly
+            }
+            self.control_queue.put_nowait(msg)
+        except:
+            pass
+
+    def set_alien4_recording(self, enabled):
+        """設定 Alien4 錄音狀態"""
+        if not self.running:
+            return
+        try:
+            msg = {
+                'type': 'set_alien4_recording',
+                'enabled': enabled
+            }
+            self.control_queue.put_nowait(msg)
+        except:
+            pass
+
+    def set_alien4_delay_params(self, time_l=None, time_r=None, feedback=None, wet_dry=None):
+        """設定 Alien4 delay 參數"""
+        if not self.running:
+            return
+        try:
+            msg = {
+                'type': 'set_alien4_delay',
+                'time_l': time_l,
+                'time_r': time_r,
+                'feedback': feedback,
+                'wet_dry': wet_dry
+            }
+            self.control_queue.put_nowait(msg)
+        except:
+            pass
+
+    def set_alien4_reverb_params(self, decay=None, wet_dry=None):
+        """設定 Alien4 reverb 參數"""
+        if not self.running:
+            return
+        try:
+            msg = {
+                'type': 'set_alien4_reverb',
+                'decay': decay,
+                'wet_dry': wet_dry
+            }
+            self.control_queue.put_nowait(msg)
+        except:
+            pass
+
+    def set_alien4_scan(self, value):
+        """設定 Alien4 scan position"""
+        if not self.running:
+            return
+        try:
+            msg = {
+                'type': 'set_alien4_scan',
+                'value': value
+            }
+            self.control_queue.put_nowait(msg)
+        except:
+            pass
+
+    def set_alien4_gate_threshold(self, value):
+        """設定 Alien4 gate threshold"""
+        if not self.running:
+            return
+        try:
+            msg = {
+                'type': 'set_alien4_gate_threshold',
+                'value': value
             }
             self.control_queue.put_nowait(msg)
         except:
