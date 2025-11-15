@@ -1973,14 +1973,28 @@ class CompactMainWindow(QMainWindow):
         if self.cv_meter_window:
             self.cv_meter_window.update_values(cv_values)
 
-        # Update Alien4 Scan slider from Seq1 (cv_values[4])
+        # Update Alien4 Scan and Len sliders from Seq1 (cv_values[4])
         if len(cv_values) > 4:
             seq1_value = cv_values[4]
-            # Block signals to prevent feedback loop
+
+            # Update Scan slider
             self.alien4_scan_slider.blockSignals(True)
             self.alien4_scan_slider.setValue(int(seq1_value * 100))
             self.alien4_scan_label.setText(f"{int(seq1_value * 100)}%")
             self.alien4_scan_slider.blockSignals(False)
+
+            # Update Len slider
+            self.alien4_length_slider.blockSignals(True)
+            self.alien4_length_slider.setValue(int(seq1_value * 100))
+            # Calculate and display slice length (same formula as _on_alien4_length_changed)
+            slice_length = 0.001 * pow(5000.0, seq1_value)
+            if slice_length < 0.01:
+                self.alien4_length_label.setText(f"{slice_length*1000:.1f}ms")
+            elif slice_length < 1.0:
+                self.alien4_length_label.setText(f"{slice_length:.2f}s")
+            else:
+                self.alien4_length_label.setText(f"{slice_length:.1f}s")
+            self.alien4_length_slider.blockSignals(False)
 
     def _update_visual_display(self, visual_params: dict):
         pass

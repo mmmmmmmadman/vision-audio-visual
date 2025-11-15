@@ -29,15 +29,21 @@
   - 第二段: 1s ~ 5s (指數: 1.0 * 5^t)
   - 預設值設為 0 (0.01s 最快衰減)
 
+### Alien4 Seq1 控制整合
+- **Seq1 CV 同時控制 Scan 和 Len**:
+  - Scan: 控制掃描位置 (0-100%)
+  - Len: 透過 `set_gate_threshold()` 控制 slice length (1ms-5s)
+  - GUI 即時更新兩個 slider 和 label 顯示
+  - 使用指數曲線: `0.001 * 5000^value` 計算 slice length
+
 ### 其他調整
 - **Scene Threshold 預設值**: 2% → 1%
-- **Alien4 Len 控制**: 跟隨 Seq1 (與 Scan 相同)
 - **Scan Time 最大值**: 30s → 300s (5分鐘)
 
 ### 修改檔案
 - `vav/midi/midi_learn.py`: 新增 note mapping 和 button 支援
-- `vav/gui/compact_main_window.py`: REC 按鈕 MIDI 支援, ENV Decay 範圍調整
-- `vav/audio/audio_process.py`: Alien4 Len 跟隨 Seq1
+- `vav/gui/compact_main_window.py`: REC 按鈕 MIDI 支援, ENV Decay 範圍調整, Seq1 更新 Len slider
+- `vav/audio/audio_process.py`: Seq1 控制 Alien4 Scan 和 Len
 - `vav/cv_generator/contour_scanner.py`: Scene threshold 預設 1%
 
 ---
