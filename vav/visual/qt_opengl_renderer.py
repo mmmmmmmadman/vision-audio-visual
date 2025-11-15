@@ -272,11 +272,9 @@ class QtMultiverseRenderer(QOpenGLWidget):
             // Apply pitch rate (matching Multiverse.cpp logic)
             // ratios[ch] now contains pitch_rate (0.0009765625 to 1.0)
             // pitch_rate = 0.5^((1-ratio)*10) where ratio is 0-1 from GUI
-            // Multiply by pitch_rate to control density
-            // ratio=1.0 → pitch_rate=1.0 → x_sample=uv.x*10
-            // ratio=0.0 → pitch_rate≈0 → x_sample≈0 (very sparse)
+            // Small pitch_rate = sparse stripes, large = dense stripes
             float pitch_rate = ratios[ch];
-            float x_sample = uv.x * pitch_rate * 10.0;
+            float x_sample = uv.x * pitch_rate;
 
             // Apply curve (Y-based X-sampling offset)
             if (curve > 0.001) {
@@ -932,10 +930,7 @@ class QtMultiverseRenderer(QOpenGLWidget):
             self.intensities[i] = ch_data.get('intensity', 1.0)
             self.curves[i] = ch_data.get('curve', 0.0)
             self.angles[i] = ch_data.get('angle', 0.0)
-            ratio_value = ch_data.get('ratio', 1.0)
-            self.ratios[i] = ratio_value
-            if i == 0 and abs(ratio_value - 1.0) > 0.01:  # Only print ch0 when ratio changes
-                print(f"[Renderer] Ch{i} ratio={ratio_value:.6f}")
+            self.ratios[i] = ch_data.get('ratio', 1.0)
             self.enabled_mask[i] = 1.0
 
         # Trigger paintGL (OpenGL calls in GUI thread)

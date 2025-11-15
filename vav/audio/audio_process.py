@@ -298,8 +298,9 @@ def audio_process_worker(
 
         master_left, master_right = mixer.process(track_inputs)
 
-        # Seq1 controls Alien4 Scan position (0.0-1.0 voltage directly maps to scan)
+        # Seq1 controls Alien4 Scan and Len position (0.0-1.0 voltage directly maps to both)
         alien4.set_scan(seq1_value)
+        alien4.set_len(seq1_value)
 
         # Process through Alien4 (returns 3 values: left, right, chaos_cv)
         processed_left, processed_right, _ = alien4.process(master_left, master_right)

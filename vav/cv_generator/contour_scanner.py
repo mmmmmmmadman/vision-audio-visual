@@ -80,7 +80,10 @@ class ContourScanner:
         self.prev_anchor_y_pct = self.anchor_y_pct
         self.prev_range_pct = self.range_pct
         self.prev_gray = None
-        self.scene_change_threshold = 2.0  # 場景變化閾值 百分比 (可從 GUI 調整 1-10%)
+        self.scene_change_threshold = 1.0  # 場景變化閾值 百分比 (可從 GUI 調整 1-10%)
+
+        # Chaos LFO speed ratio
+        self.chaos_ratio = 0.1  # 0.1-1.0, LFO speed relative to scan time (預設 1/10)
 
         # 檢測時的畫面尺寸 用於繪製時縮放
         self.detection_width = 1920
@@ -830,9 +833,13 @@ class ContourScanner:
         # 重新生成 chaos offsets 並重置 LFO 相位
         self._regenerate_lfo()
 
+    def set_chaos_ratio(self, ratio: float):
+        """Set chaos LFO speed ratio (0.1-1.0)"""
+        self.chaos_ratio = np.clip(ratio, 0.1, 1.0)
+
     def set_scan_time(self, scan_time: float):
-        """設定掃描時間（秒）"""
-        self.scan_time = np.clip(scan_time, 0.1, 60.0)
+        """設定掃描時間（秒）0.1-300s (5 minutes max)"""
+        self.scan_time = np.clip(scan_time, 0.1, 300.0)
         # 重新生成 chaos offsets 並重置 LFO 相位
         self._regenerate_lfo()
 
@@ -916,8 +923,9 @@ class ContourScanner:
         """更新 LFO Pattern 與 8 個變種訊號
 
         基於當前掃描進度計算 LFO 相位並從預計算的 pattern 取值
-        - LFO 週期 = scan_time × 10 (慢 10 倍)
-        - scan_progress (0-1) 對應 LFO 的 1/10 週期
+        - LFO 週期 = scan_time / chaos_ratio
+        - chaos_ratio: 0.1 (預設) = 1/10 速度, 1.0 = 同速
+        - scan_progress (0-1) 對應 LFO 的 chaos_ratio 週期
         - 從預計算的 pattern array 中取值
         """
         # 防禦性檢查：確保 patterns 已經生成
@@ -925,8 +933,8 @@ class ContourScanner:
             self._generate_lfo_patterns()
             return
 
-        # 計算 LFO 相位 (0 到 1，但掃描 10 次才完成一個週期)
-        self.lfo_phase = (self.scan_progress / 10.0) % 1.0
+        # 計算 LFO 相位 (0 到 1，週期由 chaos_ratio 控制)
+        self.lfo_phase = (self.scan_progress * self.chaos_ratio) % 1.0
 
         # 從預計算的 pattern 中取值
         pattern_index = int(self.lfo_phase * (self.pattern_resolution - 1))

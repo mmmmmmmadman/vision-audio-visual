@@ -857,9 +857,14 @@ class VAVController:
             self.contour_cv_generator.set_smoothing(smoothing)
 
     def set_scan_time(self, scan_time: float):
-        """Set contour scan time in seconds (0.1-60s)"""
+        """Set contour scan time in seconds (0.1-300s, 5 minutes max)"""
         if self.contour_cv_generator:
             self.contour_cv_generator.set_scan_time(scan_time)
+
+    def set_chaos_ratio(self, ratio: float):
+        """Set chaos LFO speed ratio (0.1-1.0, relative to scan time)"""
+        if self.contour_cv_generator:
+            self.contour_cv_generator.set_chaos_ratio(ratio)
 
     # Audio callback 已移至 AudioProcess (獨立 process)
     # def _update_audio_buffers(...)

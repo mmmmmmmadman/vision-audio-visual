@@ -52,6 +52,14 @@ class CompactMainWindow(QMainWindow):
         # Build UI
         self._build_ui()
 
+        # Register Rec button with MIDI Learn (after UI is built)
+        def on_alien4_rec_midi_toggle(state: bool):
+            self.alien4_rec_button.setChecked(state)
+            self.controller.set_alien4_recording(state)
+            self.status_label.setText(f"Alien4 REC: {'ON' if state else 'OFF'}")
+
+        self.midi_learn.register_button("alien4_rec", on_alien4_rec_midi_toggle)
+
         # Enable Multiverse by default after UI is built
         self.controller.enable_multiverse_rendering(True)
         self.controller.enable_region_rendering(True)
@@ -127,6 +135,25 @@ class CompactMainWindow(QMainWindow):
             callback(slider_value)
 
         self.midi_learn.register_parameter(param_id, midi_callback, min_val, max_val)
+
+    def _show_button_midi_menu(self, pos, button, param_id: str):
+        """Show MIDI context menu for button"""
+        from PyQt6.QtWidgets import QMenu
+
+        menu = QMenu()
+        learn_action = menu.addAction("MIDI Learn")
+        clear_action = menu.addAction("Clear MIDI Mapping")
+        menu.addSeparator()
+        clear_all_action = menu.addAction("Clear All MIDI Mappings")
+
+        action = menu.exec(button.mapToGlobal(pos))
+
+        if action == learn_action:
+            self.midi_learn.enter_learn_mode(param_id)
+        elif action == clear_action:
+            self.midi_learn.clear_mapping(param_id)
+        elif action == clear_all_action:
+            self.midi_learn.clear_all_mappings()
 
     def _build_ui(self):
         """Build compact UI layout"""
@@ -279,17 +306,17 @@ class CompactMainWindow(QMainWindow):
 
         # ===== COLUMN 1: CV Source =====
 
-        # ENV Decay (exponential: 0.1~1s, 1~5s)
+        # ENV Decay (exponential: 0.01~1s, 1~5s)
         self.env_global_slider = QSlider(Qt.Orientation.Horizontal)
         self.env_global_slider.setFixedHeight(16)
         self.env_global_slider.setFixedWidth(140)
         self._apply_slider_style(self.env_global_slider, COLOR_COL1)
         self.env_global_slider.setMinimum(0)
         self.env_global_slider.setMaximum(100)
-        self.env_global_slider.setValue(50)
+        self.env_global_slider.setValue(0)
         self.env_global_slider.valueChanged.connect(self._on_env_global_decay_changed)
         self._make_slider_learnable(self.env_global_slider, "env_global_decay", self._on_env_global_decay_changed)
-        self.env_global_label = self._fixed_height_label("1.0s", 35)
+        self.env_global_label = self._fixed_height_label("0.01s", 35)
         row = self._create_control_row("ENV Decay", self.env_global_slider, self.env_global_label, LABEL_WIDTH)
         col1_layout.addLayout(row)
 
@@ -299,7 +326,7 @@ class CompactMainWindow(QMainWindow):
         slider.setFixedWidth(140)
         self._apply_slider_style(slider, COLOR_COL1)
         slider.setMinimum(2)  # 0.1s
-        slider.setMaximum(600)  # 30s
+        slider.setMaximum(6000)  # 300s (5 minutes)
         slider.setValue(200)  # 10.0s
         slider.valueChanged.connect(self._on_clock_rate_changed)
         self._make_slider_learnable(slider, "scan_time", self._on_clock_rate_changed)
@@ -403,12 +430,27 @@ class CompactMainWindow(QMainWindow):
         self._apply_slider_style(self.scene_threshold_slider, COLOR_COL1)
         self.scene_threshold_slider.setMinimum(1)
         self.scene_threshold_slider.setMaximum(10)
-        self.scene_threshold_slider.setValue(2)
+        self.scene_threshold_slider.setValue(1)
         self.scene_threshold_slider.valueChanged.connect(self._on_scene_threshold_changed)
         self._make_slider_learnable(self.scene_threshold_slider, "scene_threshold", self._on_scene_threshold_changed)
-        self.scene_threshold_label = QLabel("2%")
+        self.scene_threshold_label = QLabel("1%")
         self.scene_threshold_label.setFixedWidth(30)
         row = self._create_control_row("Scene", self.scene_threshold_slider, self.scene_threshold_label, LABEL_WIDTH)
+        col1_layout.addLayout(row)
+
+        # Chaos Ratio (LFO speed relative to scan time: 0.1-1.0)
+        self.chaos_ratio_slider = QSlider(Qt.Orientation.Horizontal)
+        self.chaos_ratio_slider.setFixedHeight(16)
+        self.chaos_ratio_slider.setFixedWidth(120)
+        self._apply_slider_style(self.chaos_ratio_slider, COLOR_COL1)
+        self.chaos_ratio_slider.setMinimum(10)  # 0.1
+        self.chaos_ratio_slider.setMaximum(100)  # 1.0
+        self.chaos_ratio_slider.setValue(10)  # 0.1 default (1/10 speed)
+        self.chaos_ratio_slider.valueChanged.connect(self._on_chaos_ratio_changed)
+        self._make_slider_learnable(self.chaos_ratio_slider, "chaos_ratio", self._on_chaos_ratio_changed)
+        self.chaos_ratio_label = QLabel("1/10")
+        self.chaos_ratio_label.setFixedWidth(30)
+        row = self._create_control_row("Chaos", self.chaos_ratio_slider, self.chaos_ratio_label, LABEL_WIDTH)
         col1_layout.addLayout(row)
 
         # Timer state variables (initialized after layout creation)
@@ -532,7 +574,7 @@ class CompactMainWindow(QMainWindow):
         self._apply_slider_style(self.global_ratio_slider, COLOR_COL2)
         self.global_ratio_slider.setMinimum(0)  # 0.0
         self.global_ratio_slider.setMaximum(100)  # 1.0
-        self.global_ratio_slider.setValue(0)  # 0.0 default (sparsest stripes)
+        self.global_ratio_slider.setValue(0)  # 0.0 default (slowest/sparsest)
         self.global_ratio_slider.valueChanged.connect(self._on_global_ratio_changed)
         self._make_slider_learnable(self.global_ratio_slider, "global_ratio", self._on_global_ratio_changed)
         self.global_ratio_label = QLabel("0.00")
@@ -673,6 +715,10 @@ class CompactMainWindow(QMainWindow):
         self.alien4_rec_button.setFixedHeight(24)
         self.alien4_rec_button.setCheckable(True)
         self.alien4_rec_button.clicked.connect(self._on_alien4_rec_toggle)
+        self.alien4_rec_button.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.alien4_rec_button.customContextMenuRequested.connect(
+            lambda pos: self._show_button_midi_menu(pos, self.alien4_rec_button, "alien4_rec")
+        )
         rec_row_layout.addWidget(self.alien4_rec_button)
         rec_row_layout.addStretch()
 
@@ -1238,14 +1284,14 @@ class CompactMainWindow(QMainWindow):
 
     def _on_env_global_decay_changed(self, value: int):
         """Global ENV decay with exponential mapping
-        0-50: 0.1s ~ 1s
+        0-50: 0.01s ~ 1s
         50-100: 1s ~ 5s
         """
         import numpy as np
         if value <= 50:
-            # First half: exponential 0.1 ~ 1.0
+            # First half: exponential 0.01 ~ 1.0
             t = value / 50.0
-            decay_time = 0.1 * (10.0 ** t)
+            decay_time = 0.01 * (100.0 ** t)
         else:
             # Second half: exponential 1.0 ~ 5.0
             t = (value - 50) / 50.0
@@ -1257,7 +1303,7 @@ class CompactMainWindow(QMainWindow):
 
     def _on_clock_rate_changed(self, value: int):
         """Scan time in seconds"""
-        scan_time = value / 20.0  # 2-600 -> 0.1-30s
+        scan_time = value / 20.0  # 2-6000 -> 0.1-300s (5 minutes)
         self.controller.set_scan_time(scan_time)
         _, label = self.clock_slider
         label.setText(f"{scan_time:.1f}s")
@@ -1775,6 +1821,26 @@ class CompactMainWindow(QMainWindow):
         self.scene_threshold_label.setText(f"{value}%")
         if hasattr(self, 'controller') and self.controller and self.controller.contour_cv_generator:
             self.controller.contour_cv_generator.scene_change_threshold = float(value)
+
+    def _on_chaos_ratio_changed(self, value: int):
+        """Chaos ratio changed (0.1-1.0, LFO speed relative to scan time)"""
+        ratio = value / 100.0  # 10-100 -> 0.1-1.0
+        # Display as fraction
+        if ratio >= 0.99:
+            self.chaos_ratio_label.setText("1/1")
+        elif ratio >= 0.49:
+            self.chaos_ratio_label.setText("1/2")
+        elif ratio >= 0.32:
+            self.chaos_ratio_label.setText("1/3")
+        elif ratio >= 0.24:
+            self.chaos_ratio_label.setText("1/4")
+        elif ratio >= 0.19:
+            self.chaos_ratio_label.setText("1/5")
+        else:
+            self.chaos_ratio_label.setText("1/10")
+
+        if hasattr(self, 'controller') and self.controller:
+            self.controller.set_chaos_ratio(ratio)
 
     def _on_timer_toggle(self):
         """Toggle timer start/stop"""

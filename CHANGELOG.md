@@ -2,6 +2,46 @@
 
 ---
 
+## [2025-11-15] MIDI Button 支援與 ENV Decay 範圍擴展
+
+### MIDI Learn 按鈕支援
+- **擴展 MIDI Learn 系統支援按鈕控制**:
+  - 原本只支援 CC 映射到 slider
+  - 新增 Note 和 CC 映射到按鈕 toggle
+  - `register_button()` 方法支援 bool toggle 回調
+
+- **REC 按鈕 MIDI 映射**:
+  - 右鍵選單支援 MIDI Learn
+  - 支援 MIDI CC 和 Note On 訊息
+  - CC 訊息自動轉換為 toggle (任何值都觸發)
+  - 200ms 防抖動避免快速重複 toggle
+
+- **實作細節**:
+  - `MIDILearnManager.note_mappings` 儲存 note 映射
+  - `button_states` 追蹤 toggle 狀態
+  - `last_button_cc_time` 防抖動機制
+  - 支援任意 MIDI channel 和 CC/Note 號碼
+  - JSON 同時儲存 cc_mappings 和 note_mappings
+
+### ENV Decay 範圍調整
+- **最小值從 0.1s 改為 0.01s** (10ms):
+  - 第一段: 0.01s ~ 1s (指數: 0.01 * 100^t)
+  - 第二段: 1s ~ 5s (指數: 1.0 * 5^t)
+  - 預設值設為 0 (0.01s 最快衰減)
+
+### 其他調整
+- **Scene Threshold 預設值**: 2% → 1%
+- **Alien4 Len 控制**: 跟隨 Seq1 (與 Scan 相同)
+- **Scan Time 最大值**: 30s → 300s (5分鐘)
+
+### 修改檔案
+- `vav/midi/midi_learn.py`: 新增 note mapping 和 button 支援
+- `vav/gui/compact_main_window.py`: REC 按鈕 MIDI 支援, ENV Decay 範圍調整
+- `vav/audio/audio_process.py`: Alien4 Len 跟隨 Seq1
+- `vav/cv_generator/contour_scanner.py`: Scene threshold 預設 1%
+
+---
+
 ## [2025-11-14] CV Meters 視窗整合與 Multiverse Ratio 功能實作
 
 ### CV Meters 視窗重新設計
