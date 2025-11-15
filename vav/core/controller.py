@@ -66,7 +66,7 @@ class VAVController:
             'channel_curves': [0.0, 0.0, 0.0, 0.0],  # Curve for 4 channels (0-1)
             'channel_angles': [0.0, 45.0, 90.0, 135.0],  # Rotation angles for 4 channels
             'channel_intensities': [1.0, 1.0, 1.0, 1.0],  # Intensity for 4 channels
-            'channel_ratios': [1.0, 1.0, 1.0, 1.0],  # Ratio for 4 channels (stripe density)
+            'channel_ratios': [0.1, 0.1, 0.1, 0.1],  # Ratio for 4 channels (stripe density, default 0.1)
             'camera_mix': 0.0,  # 0.0=pure multiverse, 1.0=pure camera, blend in between
         }
 
@@ -658,6 +658,9 @@ class VAVController:
             blend_frame = original_frame
             camera_mix = self.renderer_params['camera_mix']
 
+        # Fixed compress = 3.0
+        compress = 3.0
+
         if use_gpu_region:
             # GPU region: pass camera frame for GPU calculation
             rendered_rgb = self.renderer.render(
@@ -666,7 +669,8 @@ class VAVController:
                 use_gpu_region=True,
                 overlay_data=overlay_data,
                 blend_frame=blend_frame,
-                camera_mix=camera_mix
+                camera_mix=camera_mix,
+                compress=compress
             )
         elif region_map is not None:
             # CPU region: pass pre-calculated region map
@@ -675,7 +679,8 @@ class VAVController:
                 region_map=region_map,
                 overlay_data=overlay_data,
                 blend_frame=blend_frame,
-                camera_mix=camera_mix
+                camera_mix=camera_mix,
+                compress=compress
             )
         else:
             # No region rendering
@@ -683,7 +688,8 @@ class VAVController:
                 channels_data,
                 overlay_data=overlay_data,
                 blend_frame=blend_frame,
-                camera_mix=camera_mix
+                camera_mix=camera_mix,
+                compress=compress
             )
         self.t_render = (time.time() - t0) * 1000  # ms
         t_render_call = self.t_render
@@ -1054,9 +1060,9 @@ class VAVController:
             self.renderer_params['channel_intensities'][channel] = intensity
 
     def set_renderer_channel_ratio(self, channel: int, ratio: float):
-        """Set ratio for a specific channel (0.01-10.0, stripe density)"""
+        """Set ratio for a specific channel (0.0001-10.0, stripe density)"""
         if 0 <= channel < 4:
-            ratio = np.clip(ratio, 0.01, 10.0)
+            ratio = np.clip(ratio, 0.0001, 10.0)
             self.renderer_params['channel_ratios'][channel] = ratio
 
     def set_renderer_camera_mix(self, camera_mix: float):

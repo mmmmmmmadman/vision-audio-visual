@@ -567,20 +567,7 @@ class CompactMainWindow(QMainWindow):
         row = self._create_control_row("Camera Mix", self.camera_mix_slider, self.camera_mix_label, LABEL_WIDTH)
         col2_layout.addLayout(row)
 
-        # Global Ratio (控制全部 4 個通道) - 與 Multiverse.cpp 相同範圍
-        self.global_ratio_slider = QSlider(Qt.Orientation.Horizontal)
-        self.global_ratio_slider.setFixedHeight(16)
-        self.global_ratio_slider.setFixedWidth(120)
-        self._apply_slider_style(self.global_ratio_slider, COLOR_COL2)
-        self.global_ratio_slider.setMinimum(0)  # 0.0
-        self.global_ratio_slider.setMaximum(100)  # 1.0
-        self.global_ratio_slider.setValue(0)  # 0.0 default (slowest/sparsest)
-        self.global_ratio_slider.valueChanged.connect(self._on_global_ratio_changed)
-        self._make_slider_learnable(self.global_ratio_slider, "global_ratio", self._on_global_ratio_changed)
-        self.global_ratio_label = QLabel("0.00")
-        self.global_ratio_label.setFixedWidth(30)
-        row = self._create_control_row("Ratio", self.global_ratio_slider, self.global_ratio_label, LABEL_WIDTH)
-        col2_layout.addLayout(row)
+        # Compress fixed at 2.0 in shader
 
         # Region Rendering + SD img2img (same row)
         region_sd_layout = QHBoxLayout()
@@ -1530,26 +1517,6 @@ class CompactMainWindow(QMainWindow):
         # Map 0-360 to -180 to +180 (like original Multiverse)
         mapped_angle = float(value) - 180.0
         self.controller.set_renderer_channel_angle(channel, mapped_angle)
-
-    def _on_global_ratio_changed(self, value: int):
-        """Global ratio changed - update all 4 channels
-
-        擴展 Multiverse.cpp 邏輯：
-        - GUI ratio: 0-100 (0.0-1.0)
-        - octaveDown = (1 - ratio) * 13.3 (擴展到 13.3 octaves，比原本再小 1/10)
-        - pitchRate = 0.5^octaveDown
-        """
-        # Convert slider to ratio (0-1)
-        ratio = value / 100.0
-        self.global_ratio_label.setText(f"{ratio:.2f}")
-
-        # Calculate pitch rate (extended range for sparser stripes)
-        octave_down = (1.0 - ratio) * 13.3
-        pitch_rate = 0.5 ** octave_down
-
-        # Update all 4 channels with pitch rate
-        for i in range(4):
-            self.controller.set_renderer_channel_ratio(i, pitch_rate)
 
     def _on_camera_mix_changed(self, value: int):
         """Camera mix changed"""

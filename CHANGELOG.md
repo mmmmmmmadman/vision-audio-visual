@@ -2,6 +2,62 @@
 
 ---
 
+## [2025-11-15] Frequency Compress 參數與 Channel Ratios 預設值調整
+
+### Frequency Compress 固定值
+- **Compress 參數固定為 3.0**:
+  - 原本計畫實作 compress slider 控制
+  - 最終決定使用固定值 compress = 3.0
+  - 降低條紋密度對頻率變化的敏感度
+  - Shader 公式: `compressed_pitch_rate = pitch_rate / compress`
+
+### Channel Ratios 預設值調整
+- **預設值從 1.0 改為 0.1**:
+  - 原本預設值: [1.0, 1.0, 1.0, 1.0] (條紋密集)
+  - 新預設值: [0.1, 0.1, 0.1, 0.1] (條紋稀疏)
+  - 對應 test_ratio_visualizer.py 測試程式中使用者偏好值
+  - 讓初始條紋呈現更稀疏的視覺效果
+
+### 實作細節
+- `vav/core/controller.py:69`: channel_ratios 預設值改為 0.1
+- `vav/core/controller.py:661-662`: compress 固定值 3.0
+- `vav/visual/qt_opengl_renderer.py:90`: compress uniform
+- `vav/visual/qt_opengl_renderer.py:273-278`: shader compress 運算
+
+### 修改檔案
+- `vav/core/controller.py`: channel_ratios 預設值, compress 固定值
+- `vav/visual/qt_opengl_renderer.py`: compress shader 實作
+- `vav/gui/compact_main_window.py`: 移除 compress slider
+
+---
+
+## [2025-11-15] Ratio 對數映射改進
+
+### Multiverse Ratio 控制優化
+- **改用對數映射取代線性映射**:
+  - 原本線性映射: 0.01-10.0 (slider 0-100)
+  - 改為對數映射: 0.0001-10.0 (log10 scale)
+  - slider 分布: 0→0.0001, 20→0.001, 40→0.01, 60→0.1, 80→1.0, 100→10.0
+  - 提供更均勻且細緻的條紋密度控制
+
+- **測試工具開發**:
+  - 建立 `test_ratio_visualizer.py` 獨立測試程式
+  - 即時音訊輸入 (ES-8 Input-1) 視覺化
+  - 波形顯示與條紋映射預覽
+  - 對數 ratio 控制滑桿
+
+- **實作細節**:
+  - GUI: `_on_global_ratio_changed()` 使用 log10 mapping
+  - Controller: ratio clip 範圍擴展到 0.0001-10.0
+  - Label 顯示: <0.01 顯示 4 位小數, ≥0.01 顯示 2 位小數
+
+### 修改檔案
+- `vav/gui/compact_main_window.py`: Ratio 對數映射
+- `vav/core/controller.py`: ratio clip 範圍 0.0001-10.0
+- `test_ratio_visualizer.py`: 新增測試工具
+
+---
+
 ## [2025-11-15] MIDI Button 支援與 ENV Decay 範圍擴展
 
 ### MIDI Learn 按鈕支援

@@ -87,6 +87,7 @@ class QtMultiverseRenderer(QOpenGLWidget):
     uniform float base_hue;
     uniform vec3 envelope_offsets;  // env1-3 values (0.0-1.0)
     uniform float camera_mix;  // 0.0-1.0, blend strength for camera/SD input
+    uniform float compress;  // Frequency compression ratio (0.1-10.0)
     uniform float color_scheme;  // 0.0-1.0 continuous blend between color schemes
 
     in vec2 v_texcoord;
@@ -269,12 +270,12 @@ class QtMultiverseRenderer(QOpenGLWidget):
                 // (Needed for ratio > 1 to work correctly with rotation)
             }
 
-            // Apply pitch rate (matching Multiverse.cpp logic)
-            // ratios[ch] now contains pitch_rate (0.0009765625 to 1.0)
-            // pitch_rate = 0.5^((1-ratio)*10) where ratio is 0-1 from GUI
-            // Small pitch_rate = sparse stripes, large = dense stripes
+            // Apply pitch rate with frequency compression
+            // compress parameter controls frequency-to-density mapping
+            // Higher compress = less sensitive to frequency changes
             float pitch_rate = ratios[ch];
-            float x_sample = uv.x * pitch_rate;
+            float compressed_pitch_rate = pitch_rate / compress;
+            float x_sample = uv.x * compressed_pitch_rate;
 
             // Apply curve (Y-based X-sampling offset)
             if (curve > 0.001) {
@@ -376,6 +377,7 @@ class QtMultiverseRenderer(QOpenGLWidget):
         self.base_hue = 0.0  # Base hue in range 0.0-1.0
         self.envelope_offsets = np.array([0.0, 0.0, 0.0], dtype=np.float32)  # env1-3 values (0.0-1.0)
         self.camera_mix = 0.0  # GPU blend strength (0.0-1.0)
+        self.compress = 2.0  # Frequency compression ratio (0.1-10.0)
         self.color_scheme = 0.5  # 0.0-1.0 continuous (0.5 = Tri+Contrast)
 
         # Audio data
@@ -413,6 +415,7 @@ class QtMultiverseRenderer(QOpenGLWidget):
         self.pending_overlay_data = None
         self.pending_blend_frame = None
         self.pending_camera_mix = 0.0
+        self.pending_compress = 2.0
         self.channels_data_mutex = QMutex()
 
         # Store the thread that created this renderer (GUI thread)
@@ -712,6 +715,8 @@ class QtMultiverseRenderer(QOpenGLWidget):
                        self.envelope_offsets[0], self.envelope_offsets[1], self.envelope_offsets[2])
             glUniform1f(glGetUniformLocation(self.shader_program, b"camera_mix"),
                        self.camera_mix)
+            glUniform1f(glGetUniformLocation(self.shader_program, b"compress"),
+                       self.compress)
             glUniform1f(glGetUniformLocation(self.shader_program, b"color_scheme"),
                        self.color_scheme)
 
@@ -790,7 +795,7 @@ class QtMultiverseRenderer(QOpenGLWidget):
         # Note: We don't render to screen since this is an offscreen renderer
 
     def render(self, channels_data: List[dict], region_map: np.ndarray = None, camera_frame: np.ndarray = None, use_gpu_region: bool = False,
-               overlay_data: dict = None, blend_frame: np.ndarray = None, camera_mix: float = 0.0) -> np.ndarray:
+               overlay_data: dict = None, blend_frame: np.ndarray = None, camera_mix: float = 0.0, compress: float = 2.0) -> np.ndarray:
         """
         Render all channels (THREAD-SAFE)
 
@@ -805,6 +810,7 @@ class QtMultiverseRenderer(QOpenGLWidget):
             overlay_data: Optional dict with 'contour_points', 'scan_point', 'rings' for GPU overlay
             blend_frame: Optional camera/SD frame (height, width, 3), uint8, BGR for GPU blending
             camera_mix: Blend strength (0.0-1.0) for GPU blending
+            compress: Frequency compression ratio (0.1-10.0, default 2.0)
 
         Returns:
             RGB image (height, width, 3), uint8
@@ -812,13 +818,13 @@ class QtMultiverseRenderer(QOpenGLWidget):
         # Check if we're already in the GUI thread
         if threading.current_thread() == self.gui_thread:
             # Direct rendering in GUI thread
-            return self._render_direct(channels_data, region_map, camera_frame, use_gpu_region, overlay_data, blend_frame, camera_mix)
+            return self._render_direct(channels_data, region_map, camera_frame, use_gpu_region, overlay_data, blend_frame, camera_mix, compress)
         else:
             # Marshal to GUI thread via signal
-            return self._render_via_signal(channels_data, region_map, camera_frame, use_gpu_region, overlay_data, blend_frame, camera_mix)
+            return self._render_via_signal(channels_data, region_map, camera_frame, use_gpu_region, overlay_data, blend_frame, camera_mix, compress)
 
     def _render_direct(self, channels_data: List[dict], region_map: np.ndarray = None, camera_frame: np.ndarray = None, use_gpu_region: bool = False,
-                       overlay_data: dict = None, blend_frame: np.ndarray = None, camera_mix: float = 0.0) -> np.ndarray:
+                       overlay_data: dict = None, blend_frame: np.ndarray = None, camera_mix: float = 0.0, compress: float = 2.0) -> np.ndarray:
         """
         Render directly in GUI thread (internal use only)
         """
@@ -862,6 +868,9 @@ class QtMultiverseRenderer(QOpenGLWidget):
         else:
             self.camera_blend_frame_data = None
             self.camera_mix = 0.0
+
+        # Set compress parameter
+        self.compress = compress
 
         # Handle region calculation mode
         if use_gpu_region and camera_frame is not None:
@@ -947,7 +956,7 @@ class QtMultiverseRenderer(QOpenGLWidget):
                 return np.zeros((self.render_height, self.render_width, 3), dtype=np.uint8)
 
     def _render_via_signal(self, channels_data: List[dict], region_map: np.ndarray = None, camera_frame: np.ndarray = None, use_gpu_region: bool = False,
-                           overlay_data: dict = None, blend_frame: np.ndarray = None, camera_mix: float = 0.0) -> np.ndarray:
+                           overlay_data: dict = None, blend_frame: np.ndarray = None, camera_mix: float = 0.0, compress: float = 2.0) -> np.ndarray:
         """
         Render via signal/slot to GUI thread (cross-thread safe)
         NON-BLOCKING: Returns previous frame immediately without waiting
@@ -985,6 +994,7 @@ class QtMultiverseRenderer(QOpenGLWidget):
             # Store blend frame (deep copy if present)
             self.pending_blend_frame = blend_frame.copy() if blend_frame is not None else None
             self.pending_camera_mix = camera_mix
+            self.pending_compress = compress
 
         # Emit signal to GUI thread (queued connection)
         # 不等待完成 讓 GUI thread 在背景處理
@@ -1018,6 +1028,7 @@ class QtMultiverseRenderer(QOpenGLWidget):
             overlay_data = self.pending_overlay_data
             blend_frame = self.pending_blend_frame
             camera_mix = self.pending_camera_mix
+            compress = self.pending_compress
             self.pending_channels_data = None
             self.pending_region_map = None
             self.pending_camera_frame = None
@@ -1025,11 +1036,12 @@ class QtMultiverseRenderer(QOpenGLWidget):
             self.pending_overlay_data = None
             self.pending_blend_frame = None
             self.pending_camera_mix = 0.0
+            self.pending_compress = 2.0
         t_mutex = (time.perf_counter() - t0) * 1000
 
         # Perform rendering (we're now in GUI thread)
         t1 = time.perf_counter()
-        result = self._render_direct(channels_data, region_map, camera_frame, use_gpu_region, overlay_data, blend_frame, camera_mix)
+        result = self._render_direct(channels_data, region_map, camera_frame, use_gpu_region, overlay_data, blend_frame, camera_mix, compress)
         t_render = (time.perf_counter() - t1) * 1000
 
         # Store result with mutex
