@@ -190,12 +190,14 @@ def audio_process_worker(
                         time_l=msg.get('time_l'),
                         time_r=msg.get('time_r'),
                         feedback=msg.get('feedback'),
+                        chaos_enabled=msg.get('chaos_enabled'),
                         wet_dry=msg.get('wet_dry')
                     )
 
                 elif msg_type == 'set_alien4_reverb':
                     alien4.set_reverb_params(
                         decay=msg.get('decay'),
+                        chaos_enabled=msg.get('chaos_enabled'),
                         wet_dry=msg.get('wet_dry')
                     )
 
@@ -204,6 +206,20 @@ def audio_process_worker(
 
                 elif msg_type == 'set_alien4_gate_threshold':
                     alien4.set_gate_threshold(msg.get('value'))
+
+                elif msg_type == 'set_alien4_chaos':
+                    alien4.set_chaos_params(
+                        rate=msg.get('rate'),
+                        amount=msg.get('amount'),
+                        shape=msg.get('shape')
+                    )
+
+                elif msg_type == 'set_alien4_grain':
+                    alien4.set_grain_params(
+                        size=msg.get('size'),
+                        density=msg.get('density'),
+                        wet_dry=msg.get('wet_dry')
+                    )
 
         except:
             pass
@@ -594,7 +610,7 @@ class AudioProcess:
         except:
             pass
 
-    def set_alien4_delay_params(self, time_l=None, time_r=None, feedback=None, wet_dry=None):
+    def set_alien4_delay_params(self, time_l=None, time_r=None, feedback=None, chaos_enabled=None, wet_dry=None):
         """設定 Alien4 delay 參數"""
         if not self.running:
             return
@@ -604,13 +620,14 @@ class AudioProcess:
                 'time_l': time_l,
                 'time_r': time_r,
                 'feedback': feedback,
+                'chaos_enabled': chaos_enabled,
                 'wet_dry': wet_dry
             }
             self.control_queue.put_nowait(msg)
         except:
             pass
 
-    def set_alien4_reverb_params(self, decay=None, wet_dry=None):
+    def set_alien4_reverb_params(self, decay=None, chaos_enabled=None, wet_dry=None):
         """設定 Alien4 reverb 參數"""
         if not self.running:
             return
@@ -618,6 +635,7 @@ class AudioProcess:
             msg = {
                 'type': 'set_alien4_reverb',
                 'decay': decay,
+                'chaos_enabled': chaos_enabled,
                 'wet_dry': wet_dry
             }
             self.control_queue.put_nowait(msg)
@@ -645,6 +663,36 @@ class AudioProcess:
             msg = {
                 'type': 'set_alien4_gate_threshold',
                 'value': value
+            }
+            self.control_queue.put_nowait(msg)
+        except:
+            pass
+
+    def set_alien4_chaos_params(self, rate=None, amount=None, shape=None):
+        """設定 Alien4 Chaos 參數"""
+        if not self.running:
+            return
+        try:
+            msg = {
+                'type': 'set_alien4_chaos',
+                'rate': rate,
+                'amount': amount,
+                'shape': shape
+            }
+            self.control_queue.put_nowait(msg)
+        except:
+            pass
+
+    def set_alien4_grain_params(self, size=None, density=None, wet_dry=None):
+        """設定 Alien4 Grain 參數"""
+        if not self.running:
+            return
+        try:
+            msg = {
+                'type': 'set_alien4_grain',
+                'size': size,
+                'density': density,
+                'wet_dry': wet_dry
             }
             self.control_queue.put_nowait(msg)
         except:

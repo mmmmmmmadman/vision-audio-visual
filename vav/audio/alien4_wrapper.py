@@ -55,15 +55,31 @@ class Alien4EffectChain:
         if feedback is not None:
             self.engine.set_delay_feedback(float(feedback))
 
+        # chaos_enabled 控制 delay chaos modulation
+        if chaos_enabled is not None:
+            self.engine.set_delay_chaos(bool(chaos_enabled))
+
         # wet_dry 映射到 delay_wet
         if wet_dry is not None:
             self.engine.set_delay_wet(float(wet_dry))
 
     def set_grain_params(self, size=None, density=None, position=None,
                         chaos_enabled=None, wet_dry=None):
-        """設定 Grain 參數 (Alien4 無 Grain, 映射到其他參數)"""
-        # Alien4 沒有 Grain, 可以忽略或映射到其他參數
-        pass
+        """設定 Grain 參數 (新增 Ellen Ripley Grain)"""
+        if not ALIEN4_AVAILABLE or self.engine is None:
+            return
+
+        if size is not None:
+            self.engine.set_grain_size(float(size))
+
+        if density is not None:
+            self.engine.set_grain_density(float(density))
+
+        # position 固定在 50%, 不需要設定
+        # chaos_enabled 固定為 true, 不需要設定
+
+        if wet_dry is not None:
+            self.engine.set_grain_wet_dry(float(wet_dry))
 
     def set_reverb_params(self, room_size=None, damping=None, decay=None,
                          chaos_enabled=None, wet_dry=None):
@@ -71,23 +87,32 @@ class Alien4EffectChain:
         if not ALIEN4_AVAILABLE or self.engine is None:
             return
 
-        if room_size is not None:
-            self.engine.set_reverb_room(float(room_size))
-
-        if damping is not None:
-            self.engine.set_reverb_damping(float(damping))
+        # room_size 和 damping 固定在最大值, GUI 不會傳入
+        # 只處理 decay, chaos_enabled, wet_dry
 
         if decay is not None:
             self.engine.set_reverb_decay(float(decay))
+
+        if chaos_enabled is not None:
+            self.engine.set_reverb_chaos(bool(chaos_enabled))
 
         # wet_dry 映射到 reverb_wet
         if wet_dry is not None:
             self.engine.set_reverb_wet(float(wet_dry))
 
     def set_chaos_params(self, rate=None, amount=None, shape=None):
-        """設定 Chaos 參數 (Alien4 無 Chaos, 可忽略)"""
-        # Alien4 沒有 Chaos, 可以忽略
-        pass
+        """設定 Chaos 參數 (新增 Ellen Ripley Chaos)"""
+        if not ALIEN4_AVAILABLE or self.engine is None:
+            return
+
+        if rate is not None:
+            self.engine.set_chaos_rate(float(rate))
+
+        if amount is not None:
+            self.engine.set_chaos_amount(float(amount))
+
+        if shape is not None:
+            self.engine.set_chaos_shape(bool(shape))
 
     def set_documenta_params(self, mix=None, feedback=None, speed=None,
                             eq_low=None, eq_mid=None, eq_high=None, poly=None):

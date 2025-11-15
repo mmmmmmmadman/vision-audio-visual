@@ -1131,16 +1131,16 @@ class VAVController:
             self.audio_process.set_alien4_recording(enabled)
 
     def set_alien4_delay_params(self, time_l: float = None, time_r: float = None,
-                               feedback: float = None, wet_dry: float = None):
+                               feedback: float = None, chaos_enabled: bool = None, wet_dry: float = None):
         """Set Alien4 delay parameters"""
         if self.audio_process:
             self.audio_process.set_alien4_delay_params(
-                time_l=time_l, time_r=time_r, feedback=feedback, wet_dry=wet_dry)
+                time_l=time_l, time_r=time_r, feedback=feedback, chaos_enabled=chaos_enabled, wet_dry=wet_dry)
 
-    def set_alien4_reverb_params(self, decay: float = None, wet_dry: float = None):
+    def set_alien4_reverb_params(self, decay: float = None, chaos_enabled: bool = None, wet_dry: float = None):
         """Set Alien4 reverb parameters"""
         if self.audio_process:
-            self.audio_process.set_alien4_reverb_params(decay=decay, wet_dry=wet_dry)
+            self.audio_process.set_alien4_reverb_params(decay=decay, chaos_enabled=chaos_enabled, wet_dry=wet_dry)
 
     def set_alien4_scan(self, value: float):
         """Set Alien4 scan position (0.0-1.0)"""
@@ -1151,6 +1151,16 @@ class VAVController:
         """Set Alien4 gate threshold (0.0-1.0, lower=more sensitive)"""
         if self.audio_process:
             self.audio_process.set_alien4_gate_threshold(value)
+
+    def set_alien4_chaos_params(self, rate: float = None, amount: float = None, shape: bool = None):
+        """Set Alien4 Chaos parameters"""
+        if self.audio_process:
+            self.audio_process.set_alien4_chaos_params(rate=rate, amount=amount, shape=shape)
+
+    def set_alien4_grain_params(self, size: float = None, density: float = None, wet_dry: float = None):
+        """Set Alien4 Grain parameters"""
+        if self.audio_process:
+            self.audio_process.set_alien4_grain_params(size=size, density=density, wet_dry=wet_dry)
 
     # Region-based rendering controls
     def enable_region_rendering(self, enabled: bool):

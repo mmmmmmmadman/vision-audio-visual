@@ -121,265 +121,98 @@ private:
 };
 
 // ============================================================================
-// ChaosGenerator - Lorenz attractor chaos generator
+// Delay processor
 // ============================================================================
-struct ChaosGenerator {
-    float x = 0.1f;
-    float y = 0.1f;
-    float z = 0.1f;
+class DelayProcessor {
+public:
+    static constexpr int DELAY_BUFFER_SIZE = 96000;
+
+    DelayProcessor() {
+        buffer.resize(DELAY_BUFFER_SIZE, 0.0f);
+        writeIndex = 0;
+    }
 
     void reset() {
-        x = 0.1f;
-        y = 0.1f;
-        z = 0.1f;
+        std::fill(buffer.begin(), buffer.end(), 0.0f);
+        writeIndex = 0;
     }
 
-    float process(float rate) {
-        float dt = rate * 0.001f;
+    float process(float input, float delayTime, float feedback, float sampleRate) {
+        int delaySamples = static_cast<int>(delayTime * sampleRate);
+        delaySamples = clamp(delaySamples, 1, DELAY_BUFFER_SIZE - 1);
 
-        float dx = 7.5f * (y - x);
-        float dy = x * (30.9f - z) - y;
-        float dz = x * y - 1.02f * z;
+        int readIndex = (writeIndex - delaySamples + DELAY_BUFFER_SIZE) % DELAY_BUFFER_SIZE;
+        float delayedSignal = buffer[readIndex];
 
-        x += dx * dt;
-        y += dy * dt;
-        z += dz * dt;
+        buffer[writeIndex] = input + delayedSignal * feedback;
+        writeIndex = (writeIndex + 1) % DELAY_BUFFER_SIZE;
 
-        // Prevent numerical explosion
-        if (std::isnan(x) || std::isnan(y) || std::isnan(z) ||
-            std::abs(x) > 100.0f || std::abs(y) > 100.0f || std::abs(z) > 100.0f) {
-            reset();
-        }
-
-        return clamp(x * 0.1f, -1.0f, 1.0f);
+        return delayedSignal;
     }
+
+private:
+    std::vector<float> buffer;
+    int writeIndex;
 };
 
 // ============================================================================
-// GrainProcessor - Granular synthesis processor
+// Reverb processor (Freeverb-style with stereo spread)
 // ============================================================================
-struct GrainProcessor {
-    static constexpr int GRAIN_BUFFER_SIZE = 8192;
-    float grainBuffer[GRAIN_BUFFER_SIZE];
-    int grainWriteIndex = 0;
+class ReverbProcessor {
+public:
+    // Base sizes for left channel
+    static constexpr int COMB_1_BASE = 1557;
+    static constexpr int COMB_2_BASE = 1617;
+    static constexpr int COMB_3_BASE = 1491;
+    static constexpr int COMB_4_BASE = 1422;
+    static constexpr int ALLPASS_1_BASE = 556;
+    static constexpr int ALLPASS_2_BASE = 441;
 
-    struct Grain {
-        bool active = false;
-        float position = 0.0f;
-        float size = 0.0f;
-        float envelope = 0.0f;
-        float direction = 1.0f;
-        float pitch = 1.0f;
-    };
+    // Stereo spread offset (adds variation for right channel)
+    static constexpr int STEREO_SPREAD = 23;
 
-    static constexpr int MAX_GRAINS = 16;
-    Grain grains[MAX_GRAINS];
-
-    float phase = 0.0f;
-    std::default_random_engine randomEngine;
-
-    GrainProcessor() : randomEngine(std::random_device()()) {
+    ReverbProcessor(bool isRightChannel = false)
+        : comb1Size(COMB_1_BASE + (isRightChannel ? STEREO_SPREAD : 0)),
+          comb2Size(COMB_2_BASE + (isRightChannel ? STEREO_SPREAD : 0)),
+          comb3Size(COMB_3_BASE + (isRightChannel ? STEREO_SPREAD : 0)),
+          comb4Size(COMB_4_BASE + (isRightChannel ? STEREO_SPREAD : 0)),
+          allpass1Size(ALLPASS_1_BASE + (isRightChannel ? STEREO_SPREAD : 0)),
+          allpass2Size(ALLPASS_2_BASE + (isRightChannel ? STEREO_SPREAD : 0))
+    {
+        combBuffer1.resize(comb1Size, 0.0f);
+        combBuffer2.resize(comb2Size, 0.0f);
+        combBuffer3.resize(comb3Size, 0.0f);
+        combBuffer4.resize(comb4Size, 0.0f);
+        allpassBuffer1.resize(allpass1Size, 0.0f);
+        allpassBuffer2.resize(allpass2Size, 0.0f);
         reset();
     }
 
     void reset() {
-        for (int i = 0; i < GRAIN_BUFFER_SIZE; i++) {
-            grainBuffer[i] = 0.0f;
-        }
-        grainWriteIndex = 0;
-
-        for (int i = 0; i < MAX_GRAINS; i++) {
-            grains[i].active = false;
-        }
-        phase = 0.0f;
-    }
-
-    float process(float input, float grainSize, float density, float position,
-                  bool chaosEnabled, float chaosOutput, float sampleRate) {
-
-        grainBuffer[grainWriteIndex] = input;
-        grainWriteIndex = (grainWriteIndex + 1) % GRAIN_BUFFER_SIZE;
-
-        float grainSizeMs = grainSize * 99.0f + 1.0f;
-        float grainSamples = (grainSizeMs / 1000.0f) * sampleRate;
-
-        float densityValue = density;
-        if (chaosEnabled) {
-            densityValue += chaosOutput * 0.3f;
-        }
-        densityValue = clamp(densityValue, 0.0f, 1.0f);
-
-        float triggerRate = densityValue * 50.0f + 1.0f;
-        phase += triggerRate / sampleRate;
-
-        if (phase >= 1.0f) {
-            phase -= 1.0f;
-
-            for (int i = 0; i < MAX_GRAINS; i++) {
-                if (!grains[i].active) {
-                    grains[i].active = true;
-                    grains[i].size = grainSamples;
-                    grains[i].envelope = 0.0f;
-
-                    float pos = position;
-                    if (chaosEnabled) {
-                        pos += chaosOutput * 20.0f; // Enhanced shift 10x from 2.0f
-
-                        std::uniform_real_distribution<float> uniformDist(0.0f, 1.0f);
-                        if (uniformDist(randomEngine) < 0.3f) {
-                            grains[i].direction = -1.0f;
-                        } else {
-                            grains[i].direction = 1.0f;
-                        }
-
-                        if (densityValue > 0.7f && uniformDist(randomEngine) < 0.2f) {
-                            grains[i].pitch = uniformDist(randomEngine) < 0.5f ? 0.5f : 2.0f;
-                        } else {
-                            grains[i].pitch = 1.0f;
-                        }
-                    } else {
-                        grains[i].direction = 1.0f;
-                        grains[i].pitch = 1.0f;
-                    }
-
-                    pos = clamp(pos, 0.0f, 1.0f);
-                    grains[i].position = pos * GRAIN_BUFFER_SIZE;
-                    break;
-                }
-            }
-        }
-
-        float output = 0.0f;
-        int activeGrains = 0;
-
-        for (int i = 0; i < MAX_GRAINS; i++) {
-            if (grains[i].active) {
-                float envPhase = grains[i].envelope / grains[i].size;
-
-                if (envPhase >= 1.0f) {
-                    grains[i].active = false;
-                    continue;
-                }
-
-                float env = 0.5f * (1.0f - std::cos(envPhase * 2.0f * M_PI));
-
-                int readPos = static_cast<int>(grains[i].position);
-                // Ensure readPos is always valid
-                readPos = ((readPos % GRAIN_BUFFER_SIZE) + GRAIN_BUFFER_SIZE) % GRAIN_BUFFER_SIZE;
-
-                float sample = grainBuffer[readPos];
-                output += sample * env;
-
-                // Update position with proper boundary handling
-                grains[i].position += grains[i].direction * grains[i].pitch;
-
-                // Handle position wrapping to prevent accumulated floating point errors
-                while (grains[i].position >= GRAIN_BUFFER_SIZE) {
-                    grains[i].position -= GRAIN_BUFFER_SIZE;
-                }
-                while (grains[i].position < 0) {
-                    grains[i].position += GRAIN_BUFFER_SIZE;
-                }
-
-                grains[i].envelope += 1.0f;
-                activeGrains++;
-            }
-        }
-
-        if (activeGrains > 0) {
-            output /= std::sqrt(activeGrains);
-        }
-
-        return output;
-    }
-};
-
-// ============================================================================
-// ReverbProcessor - Full Ellen Ripley version with 8 comb filters
-// ============================================================================
-struct ReverbProcessor {
-    // Freeverb-style parallel comb filters + series allpass
-    static constexpr int COMB_1_SIZE = 1557;  // ~32ms at 48kHz
-    static constexpr int COMB_2_SIZE = 1617;  // ~34ms
-    static constexpr int COMB_3_SIZE = 1491;  // ~31ms
-    static constexpr int COMB_4_SIZE = 1422;  // ~30ms
-    static constexpr int COMB_5_SIZE = 1277;  // ~27ms (for stereo)
-    static constexpr int COMB_6_SIZE = 1356;  // ~28ms (for stereo)
-    static constexpr int COMB_7_SIZE = 1188;  // ~25ms (for stereo)
-    static constexpr int COMB_8_SIZE = 1116;  // ~23ms (for stereo)
-
-    float combBuffer1[COMB_1_SIZE];
-    float combBuffer2[COMB_2_SIZE];
-    float combBuffer3[COMB_3_SIZE];
-    float combBuffer4[COMB_4_SIZE];
-    float combBuffer5[COMB_5_SIZE];
-    float combBuffer6[COMB_6_SIZE];
-    float combBuffer7[COMB_7_SIZE];
-    float combBuffer8[COMB_8_SIZE];
-
-    int combIndex1 = 0, combIndex2 = 0, combIndex3 = 0, combIndex4 = 0;
-    int combIndex5 = 0, combIndex6 = 0, combIndex7 = 0, combIndex8 = 0;
-
-    // Lowpass filters in comb feedback loops
-    float combLp1 = 0.0f, combLp2 = 0.0f, combLp3 = 0.0f, combLp4 = 0.0f;
-    float combLp5 = 0.0f, combLp6 = 0.0f, combLp7 = 0.0f, combLp8 = 0.0f;
-
-    // Highpass filter for reverb output (to remove sub-100Hz)
-    float hpState = 0.0f;
-
-    // Series allpass filters for diffusion
-    static constexpr int ALLPASS_1_SIZE = 556;
-    static constexpr int ALLPASS_2_SIZE = 441;
-    static constexpr int ALLPASS_3_SIZE = 341;
-    static constexpr int ALLPASS_4_SIZE = 225;
-
-    float allpassBuffer1[ALLPASS_1_SIZE];
-    float allpassBuffer2[ALLPASS_2_SIZE];
-    float allpassBuffer3[ALLPASS_3_SIZE];
-    float allpassBuffer4[ALLPASS_4_SIZE];
-
-    int allpassIndex1 = 0, allpassIndex2 = 0, allpassIndex3 = 0, allpassIndex4 = 0;
-
-    ReverbProcessor() { reset(); }
-
-    void reset() {
-        for (int i = 0; i < COMB_1_SIZE; i++) combBuffer1[i] = 0.0f;
-        for (int i = 0; i < COMB_2_SIZE; i++) combBuffer2[i] = 0.0f;
-        for (int i = 0; i < COMB_3_SIZE; i++) combBuffer3[i] = 0.0f;
-        for (int i = 0; i < COMB_4_SIZE; i++) combBuffer4[i] = 0.0f;
-        for (int i = 0; i < COMB_5_SIZE; i++) combBuffer5[i] = 0.0f;
-        for (int i = 0; i < COMB_6_SIZE; i++) combBuffer6[i] = 0.0f;
-        for (int i = 0; i < COMB_7_SIZE; i++) combBuffer7[i] = 0.0f;
-        for (int i = 0; i < COMB_8_SIZE; i++) combBuffer8[i] = 0.0f;
-
-        for (int i = 0; i < ALLPASS_1_SIZE; i++) allpassBuffer1[i] = 0.0f;
-        for (int i = 0; i < ALLPASS_2_SIZE; i++) allpassBuffer2[i] = 0.0f;
-        for (int i = 0; i < ALLPASS_3_SIZE; i++) allpassBuffer3[i] = 0.0f;
-        for (int i = 0; i < ALLPASS_4_SIZE; i++) allpassBuffer4[i] = 0.0f;
+        std::fill(combBuffer1.begin(), combBuffer1.end(), 0.0f);
+        std::fill(combBuffer2.begin(), combBuffer2.end(), 0.0f);
+        std::fill(combBuffer3.begin(), combBuffer3.end(), 0.0f);
+        std::fill(combBuffer4.begin(), combBuffer4.end(), 0.0f);
+        std::fill(allpassBuffer1.begin(), allpassBuffer1.end(), 0.0f);
+        std::fill(allpassBuffer2.begin(), allpassBuffer2.end(), 0.0f);
 
         combIndex1 = combIndex2 = combIndex3 = combIndex4 = 0;
-        combIndex5 = combIndex6 = combIndex7 = combIndex8 = 0;
-        allpassIndex1 = allpassIndex2 = allpassIndex3 = allpassIndex4 = 0;
-
+        allpassIndex1 = allpassIndex2 = 0;
         combLp1 = combLp2 = combLp3 = combLp4 = 0.0f;
-        combLp5 = combLp6 = combLp7 = combLp8 = 0.0f;
         hpState = 0.0f;
     }
 
-    float processComb(float input, float* buffer, int size, int& index, float feedback, float& lp, float damping) {
+    float processComb(float input, std::vector<float>& buffer, int size,
+                     int& index, float feedback, float& lp, float damping) {
         float output = buffer[index];
-
-        // Apply lowpass filter to feedback signal
         lp = lp + (output - lp) * damping;
-
-        // Write input + filtered feedback
         buffer[index] = input + lp * feedback;
         index = (index + 1) % size;
-
         return output;
     }
 
-    float processAllpass(float input, float* buffer, int size, int& index, float gain) {
+    float processAllpass(float input, std::vector<float>& buffer, int size,
+                        int& index, float gain) {
         float delayed = buffer[index];
         float output = -input * gain + delayed;
         buffer[index] = input + delayed * gain;
@@ -387,140 +220,51 @@ struct ReverbProcessor {
         return output;
     }
 
-    float process(float inputL, float inputR, float grainDensity,
-                  float roomSize, float damping, float decay, bool isLeftChannel,
-                  bool chaosEnabled, float chaosOutput, float sampleRate) {
-
-        // Use proper stereo input instead of mixing to mono
-        float input = isLeftChannel ? inputL : inputR;
-
-        // Calculate feedback based on decay - much wider range for 10+ second tails
-        float feedback = 0.5f + decay * 0.485f; // 0.5 to 0.985 (near infinite at max)
-        if (chaosEnabled) {
-            feedback += chaosOutput * 0.5f; // Enhanced chaos effect 10x from 0.05f
-            feedback = clamp(feedback, 0.0f, 0.995f);
-        }
-
-        // Damping: low value = more damping (darker), high value = less damping (brighter)
+    float process(float input, float roomSize, float damping, float decay, float sampleRate) {
+        float feedback = 0.5f + decay * 0.485f;
         float dampingCoeff = 0.05f + damping * 0.9f;
+        float roomScale = 0.3f + roomSize * 1.4f;
 
-        // Room size affects delay buffer read positions dramatically
-        float roomScale = 0.3f + roomSize * 1.4f; // 0.3 to 1.7 scaling
-
+        float roomInput = input * roomScale;
         float combOut = 0.0f;
 
-        if (isLeftChannel) {
-            // Room size creates variable delay taps for room simulation
-            // Ensure room offsets are always positive
-            int roomOffset1 = std::max(0, static_cast<int>(roomSize * 400 + chaosOutput * 50)); // 0-450 samples
-            int roomOffset2 = std::max(0, static_cast<int>(roomSize * 350 + chaosOutput * 40));
+        combOut += processComb(roomInput, combBuffer1, comb1Size, combIndex1,
+                              feedback, combLp1, dampingCoeff);
+        combOut += processComb(roomInput, combBuffer2, comb2Size, combIndex2,
+                              feedback, combLp2, dampingCoeff);
+        combOut += processComb(roomInput, combBuffer3, comb3Size, combIndex3,
+                              feedback, combLp3, dampingCoeff);
+        combOut += processComb(roomInput, combBuffer4, comb4Size, combIndex4,
+                              feedback, combLp4, dampingCoeff);
 
-            // Use room-modulated delay reads with safe modulo operation
-            int readIdx1 = ((combIndex1 - roomOffset1) % COMB_1_SIZE + COMB_1_SIZE) % COMB_1_SIZE;
-            int readIdx2 = ((combIndex2 - roomOffset2) % COMB_2_SIZE + COMB_2_SIZE) % COMB_2_SIZE;
-
-            float roomInput = input * roomScale;
-            combOut += processComb(roomInput, combBuffer1, COMB_1_SIZE, combIndex1, feedback, combLp1, dampingCoeff);
-            combOut += processComb(roomInput, combBuffer2, COMB_2_SIZE, combIndex2, feedback, combLp2, dampingCoeff);
-            combOut += processComb(roomInput, combBuffer3, COMB_3_SIZE, combIndex3, feedback, combLp3, dampingCoeff);
-            combOut += processComb(roomInput, combBuffer4, COMB_4_SIZE, combIndex4, feedback, combLp4, dampingCoeff);
-
-            // Add room reflections
-            combOut += combBuffer1[readIdx1] * roomSize * 0.15f;
-            combOut += combBuffer2[readIdx2] * roomSize * 0.12f;
-        } else {
-            // Right channel: different room characteristics
-            // Ensure room offsets are always positive
-            int roomOffset5 = std::max(0, static_cast<int>(roomSize * 380 + chaosOutput * 45));
-            int roomOffset6 = std::max(0, static_cast<int>(roomSize * 420 + chaosOutput * 55));
-
-            // Use safe modulo operation
-            int readIdx5 = ((combIndex5 - roomOffset5) % COMB_5_SIZE + COMB_5_SIZE) % COMB_5_SIZE;
-            int readIdx6 = ((combIndex6 - roomOffset6) % COMB_6_SIZE + COMB_6_SIZE) % COMB_6_SIZE;
-
-            float roomInput = input * roomScale;
-            combOut += processComb(roomInput, combBuffer5, COMB_5_SIZE, combIndex5, feedback, combLp5, dampingCoeff);
-            combOut += processComb(roomInput, combBuffer6, COMB_6_SIZE, combIndex6, feedback, combLp6, dampingCoeff);
-            combOut += processComb(roomInput, combBuffer7, COMB_7_SIZE, combIndex7, feedback, combLp7, dampingCoeff);
-            combOut += processComb(roomInput, combBuffer8, COMB_8_SIZE, combIndex8, feedback, combLp8, dampingCoeff);
-
-            // Add room reflections
-            combOut += combBuffer5[readIdx5] * roomSize * 0.13f;
-            combOut += combBuffer6[readIdx6] * roomSize * 0.11f;
-        }
-
-        // Scale comb output
         combOut *= 0.25f;
 
-        // Series allpass diffusion
         float diffused = combOut;
-        diffused = processAllpass(diffused, allpassBuffer1, ALLPASS_1_SIZE, allpassIndex1, 0.5f);
-        diffused = processAllpass(diffused, allpassBuffer2, ALLPASS_2_SIZE, allpassIndex2, 0.5f);
-        diffused = processAllpass(diffused, allpassBuffer3, ALLPASS_3_SIZE, allpassIndex3, 0.5f);
-        diffused = processAllpass(diffused, allpassBuffer4, ALLPASS_4_SIZE, allpassIndex4, 0.5f);
+        diffused = processAllpass(diffused, allpassBuffer1, allpass1Size,
+                                 allpassIndex1, 0.5f);
+        diffused = processAllpass(diffused, allpassBuffer2, allpass2Size,
+                                 allpassIndex2, 0.5f);
 
-        // Apply highpass filter to remove frequencies below ~100Hz
-        // Cutoff frequency calculation for 100Hz at 48kHz: fc = 100/(48000/2) = 0.00416
-        float hpCutoff = 100.0f / (sampleRate * 0.5f); // Normalized frequency
-        hpCutoff = clamp(hpCutoff, 0.001f, 0.1f); // Safety clamp
+        // Highpass filter
+        float hpCutoff = 100.0f / (sampleRate * 0.5f);
+        hpCutoff = clamp(hpCutoff, 0.001f, 0.1f);
         hpState += (diffused - hpState) * hpCutoff;
         float hpOutput = diffused - hpState;
 
         return hpOutput;
     }
-};
-
-// ============================================================================
-// DelayProcessor - Ellen Ripley version with L/R separation and chaos support
-// ============================================================================
-class DelayProcessor {
-public:
-    static constexpr int DELAY_BUFFER_SIZE = 96000;
-
-    DelayProcessor() {
-        leftBuffer.resize(DELAY_BUFFER_SIZE, 0.0f);
-        rightBuffer.resize(DELAY_BUFFER_SIZE, 0.0f);
-        leftWriteIndex = 0;
-        rightWriteIndex = 0;
-    }
-
-    void reset() {
-        std::fill(leftBuffer.begin(), leftBuffer.end(), 0.0f);
-        std::fill(rightBuffer.begin(), rightBuffer.end(), 0.0f);
-        leftWriteIndex = 0;
-        rightWriteIndex = 0;
-    }
-
-    std::pair<float, float> process(float inputL, float inputR, float delayTimeL,
-                                     float delayTimeR, float feedback, float sampleRate) {
-        // Left channel
-        int delaySamplesL = static_cast<int>(delayTimeL * sampleRate);
-        delaySamplesL = clamp(delaySamplesL, 1, DELAY_BUFFER_SIZE - 1);
-
-        int readIndexL = (leftWriteIndex - delaySamplesL + DELAY_BUFFER_SIZE) % DELAY_BUFFER_SIZE;
-        float delayedSignalL = leftBuffer[readIndexL];
-
-        leftBuffer[leftWriteIndex] = inputL + delayedSignalL * feedback;
-        leftWriteIndex = (leftWriteIndex + 1) % DELAY_BUFFER_SIZE;
-
-        // Right channel
-        int delaySamplesR = static_cast<int>(delayTimeR * sampleRate);
-        delaySamplesR = clamp(delaySamplesR, 1, DELAY_BUFFER_SIZE - 1);
-
-        int readIndexR = (rightWriteIndex - delaySamplesR + DELAY_BUFFER_SIZE) % DELAY_BUFFER_SIZE;
-        float delayedSignalR = rightBuffer[readIndexR];
-
-        rightBuffer[rightWriteIndex] = inputR + delayedSignalR * feedback;
-        rightWriteIndex = (rightWriteIndex + 1) % DELAY_BUFFER_SIZE;
-
-        return std::make_pair(delayedSignalL, delayedSignalR);
-    }
 
 private:
-    std::vector<float> leftBuffer;
-    std::vector<float> rightBuffer;
-    int leftWriteIndex;
-    int rightWriteIndex;
+    std::vector<float> combBuffer1, combBuffer2, combBuffer3, combBuffer4;
+    std::vector<float> allpassBuffer1, allpassBuffer2;
+    int combIndex1, combIndex2, combIndex3, combIndex4;
+    int allpassIndex1, allpassIndex2;
+    float combLp1, combLp2, combLp3, combLp4;
+    float hpState;
+
+    // Buffer sizes (different for L/R channels for stereo effect)
+    int comb1Size, comb2Size, comb3Size, comb4Size;
+    int allpass1Size, allpass2Size;
 };
 
 // ============================================================================
@@ -534,7 +278,9 @@ public:
         : sampleRate(sample_rate),
           loopBuffer(LOOP_BUFFER_SIZE, 0.0f),
           tempBuffer(LOOP_BUFFER_SIZE, 0.0f),
-          randomEngine(std::random_device()())
+          randomEngine(std::random_device()()),
+          reverbL(false),  // Left channel
+          reverbR(true)    // Right channel with stereo spread
     {
         // Initialize default parameters
         isRecording = false;
@@ -666,14 +412,10 @@ public:
         lastOutputL = 0.0f;
         lastOutputR = 0.0f;
 
-        delay.reset();
+        delayL.reset();
+        delayR.reset();
         reverbL.reset();
         reverbR.reset();
-
-        // Reset Chaos and Grain processors
-        chaos.reset();
-        leftGrainProcessor.reset();
-        rightGrainProcessor.reset();
 
         // Reset EQ filters
         eqLowL.reset();
@@ -806,22 +548,6 @@ public:
     void set_reverb_wet(double value) {
         reverbWet = clamp(static_cast<float>(value), 0.0f, 1.0f);
     }
-
-    // ========================================================================
-    // Chaos control methods
-    // ========================================================================
-    void set_chaos_rate(float rate) { chaosRate = clamp(rate, 0.0f, 1.0f); }
-    void set_chaos_amount(float amount) { chaosAmount = clamp(amount, 0.0f, 1.0f); }
-    void set_chaos_shape(bool shape) { chaosShape = shape; }
-    void set_delay_chaos(bool enabled) { delayChaosMod = enabled; }
-    void set_reverb_chaos(bool enabled) { reverbChaosMod = enabled; }
-
-    // ========================================================================
-    // Grain control methods
-    // ========================================================================
-    void set_grain_size(float size) { grainSize = clamp(size, 0.0f, 1.0f); }
-    void set_grain_density(float density) { grainDensity = clamp(density, 0.0f, 1.0f); }
-    void set_grain_wet_dry(float wet) { grainWetDry = clamp(wet, 0.0f, 1.0f); }
 
     // ========================================================================
     // Process audio
@@ -1165,90 +891,25 @@ public:
             eqR = eqMidR.process(eqR);
             eqR = eqHighR.process(eqR);
 
-            // ================================================================
-            // Stage 1: Generate chaos signal
-            // ================================================================
-            float chaosRateValue;
-            if (chaosShape) {
-                // Shape ON: 1.0-10.0 range
-                chaosRateValue = 1.0f + chaosRate * 9.0f;
-            } else {
-                // Shape OFF: 0.01-1.0 range
-                chaosRateValue = 0.01f + chaosRate * 0.99f;
-            }
+            // Delay processing - ensure true stereo independence
+            // Process left channel delay with left-specific parameters
+            float delayedL = delayL.process(eqL, smoothDelayTimeL, smoothDelayFeedback, sampleRate);
 
-            float chaosRaw = chaos.process(chaosRateValue) * chaosAmount;
-
-            // Apply step function if chaosShape is true
-            static float lastStep = 0.0f;
-            static float stepPhase = 0.0f;
-            float chaosOutput;
-
-            if (chaosShape) {
-                float stepRate = chaosRateValue * 10.0f;
-                stepPhase += stepRate / sampleRate;
-                if (stepPhase >= 1.0f) {
-                    lastStep = chaosRaw;
-                    stepPhase = 0.0f;
-                }
-                chaosOutput = lastStep;
-            } else {
-                chaosOutput = chaosRaw;
-            }
-
-            // ================================================================
-            // Stage 2: Delay processing with chaos modulation
-            // ================================================================
-            // Apply chaos modulation to delay times if enabled
-            float modDelayTimeL = smoothDelayTimeL;
-            float modDelayTimeR = smoothDelayTimeR;
-            float modDelayFeedback = smoothDelayFeedback;
-
-            if (delayChaosMod) {
-                modDelayTimeL += chaosOutput * 0.1f;
-                modDelayTimeR += chaosOutput * 0.1f;
-                modDelayTimeL = clamp(modDelayTimeL, 0.001f, 2.0f);
-                modDelayTimeR = clamp(modDelayTimeR, 0.001f, 2.0f);
-
-                modDelayFeedback += chaosOutput * 0.1f;
-                modDelayFeedback = clamp(modDelayFeedback, 0.0f, 0.95f);
-            }
-
-            auto delayResult = delay.process(eqL, eqR, modDelayTimeL, modDelayTimeR,
-                                            modDelayFeedback, sampleRate);
-            float delayedL = delayResult.first;
-            float delayedR = delayResult.second;
+            // Process right channel delay with right-specific parameters
+            float delayedR = delayR.process(eqR, smoothDelayTimeR, smoothDelayFeedback, sampleRate);
 
             // Mix delayed signals independently for each channel
             float delayMixL = eqL * (1.0f - smoothDelayWet) + delayedL * smoothDelayWet;
             float delayMixR = eqR * (1.0f - smoothDelayWet) + delayedR * smoothDelayWet;
 
-            // ================================================================
-            // Stage 3: Grain processing
-            // ================================================================
-            float leftGrainOutput = leftGrainProcessor.process(delayMixL, grainSize, grainDensity,
-                                                              grainPosition, grainChaosMod,
-                                                              chaosOutput, sampleRate);
-            float rightGrainOutput = rightGrainProcessor.process(delayMixR, grainSize, grainDensity,
-                                                                 grainPosition, grainChaosMod,
-                                                                 chaosOutput * -1.0f, sampleRate);
+            // Reverb processing
+            float reverbedL = reverbL.process(delayMixL, smoothReverbRoom, smoothReverbDamping,
+                                             smoothReverbDecay, sampleRate);
+            float reverbedR = reverbR.process(delayMixR, smoothReverbRoom, smoothReverbDamping,
+                                             smoothReverbDecay, sampleRate);
 
-            // Grain wet/dry mix
-            float leftStage2 = delayMixL * (1.0f - grainWetDry) + leftGrainOutput * grainWetDry;
-            float rightStage2 = delayMixR * (1.0f - grainWetDry) + rightGrainOutput * grainWetDry;
-
-            // ================================================================
-            // Stage 4: Reverb processing with chaos modulation
-            // ================================================================
-            float reverbedL = reverbL.process(leftStage2, rightStage2, grainDensity,
-                                             smoothReverbRoom, smoothReverbDamping, smoothReverbDecay,
-                                             true, reverbChaosMod, chaosOutput, sampleRate);
-            float reverbedR = reverbR.process(leftStage2, rightStage2, grainDensity,
-                                             smoothReverbRoom, smoothReverbDamping, smoothReverbDecay,
-                                             false, reverbChaosMod, chaosOutput, sampleRate);
-
-            float outputL = leftStage2 * (1.0f - smoothReverbWet) + reverbedL * smoothReverbWet;
-            float outputR = rightStage2 * (1.0f - smoothReverbWet) + reverbedR * smoothReverbWet;
+            float outputL = delayMixL * (1.0f - smoothReverbWet) + reverbedL * smoothReverbWet;
+            float outputR = delayMixR * (1.0f - smoothReverbWet) + reverbedR * smoothReverbWet;
 
             // Store for feedback
             lastOutputL = outputL;
@@ -1296,13 +957,8 @@ private:
     BiquadFilter eqHighL, eqHighR;
 
     // Effects processors
-    DelayProcessor delay;  // Single delay processor with L/R separation
+    DelayProcessor delayL, delayR;
     ReverbProcessor reverbL, reverbR;
-
-    // Chaos and Grain processors
-    ChaosGenerator chaos;
-    GrainProcessor leftGrainProcessor;
-    GrainProcessor rightGrainProcessor;
 
     // State
     bool isRecording;
@@ -1321,20 +977,6 @@ private:
     float eqLowDb, eqMidDb, eqHighDb;  // Cut-only: 0 to -20dB
     float delayTimeL, delayTimeR, delayFeedback, delayWet;
     float reverbRoom, reverbDamping, reverbDecay, reverbWet;
-
-    // Chaos parameters
-    float chaosRate = 0.01f;
-    float chaosAmount = 1.0f;
-    bool chaosShape = false;  // false = smooth (0.01-1.0), true = stepped (1.0-10.0)
-    bool delayChaosMod = false;
-    bool grainChaosMod = true;   // 固定 on
-    bool reverbChaosMod = false;
-
-    // Grain parameters
-    float grainSize = 0.3f;        // 0.0-1.0
-    float grainDensity = 0.4f;     // Break parameter
-    float grainPosition = 0.5f;    // Shift parameter, 固定 50% = 0.5
-    float grainWetDry = 0.0f;      // Dry/Wet mix
 
     // Smoothed parameters (current values)
     float smoothMix, smoothFeedback, smoothSpeed;
@@ -1531,34 +1173,6 @@ PYBIND11_MODULE(alien4, m) {
         .def("set_reverb_wet", &AudioEngine::set_reverb_wet,
              py::arg("value"),
              "Set reverb wet/dry mix (0.0-1.0)")
-
-        // Chaos parameters
-        .def("set_chaos_rate", &AudioEngine::set_chaos_rate,
-             py::arg("rate"),
-             "Set chaos rate (0.0-1.0)")
-        .def("set_chaos_amount", &AudioEngine::set_chaos_amount,
-             py::arg("amount"),
-             "Set chaos amount (0.0-1.0)")
-        .def("set_chaos_shape", &AudioEngine::set_chaos_shape,
-             py::arg("shape"),
-             "Set chaos shape (false=smooth, true=stepped)")
-        .def("set_delay_chaos", &AudioEngine::set_delay_chaos,
-             py::arg("enabled"),
-             "Enable/disable delay chaos modulation")
-        .def("set_reverb_chaos", &AudioEngine::set_reverb_chaos,
-             py::arg("enabled"),
-             "Enable/disable reverb chaos modulation")
-
-        // Grain parameters
-        .def("set_grain_size", &AudioEngine::set_grain_size,
-             py::arg("size"),
-             "Set grain size (0.0-1.0)")
-        .def("set_grain_density", &AudioEngine::set_grain_density,
-             py::arg("density"),
-             "Set grain density/break (0.0-1.0)")
-        .def("set_grain_wet_dry", &AudioEngine::set_grain_wet_dry,
-             py::arg("wet"),
-             "Set grain wet/dry mix (0.0-1.0)")
 
         // Process audio
         .def("process", &AudioEngine::process,

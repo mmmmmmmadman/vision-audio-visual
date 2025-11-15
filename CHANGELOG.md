@@ -2,6 +2,116 @@
 
 ---
 
+## [2025-11-15] Ellen Ripley 效果器整合至 Alien4
+
+### Alien4 音訊效果器架構升級
+- **Ellen Ripley 效果器完整移植**:
+  - 保留 Alien4 核心功能 (Loop buffer, Slice detection, Polyphonic playback)
+  - 替換 Delay/Reverb 為 Ellen Ripley 完整版本
+  - 新增 ChaosGenerator (Lorenz attractor)
+  - 新增 GrainProcessor (16-grain granular synthesis)
+
+### 效果器實作細節
+
+#### 1. ChaosGenerator (混沌產生器)
+- **Lorenz attractor 實作**: 三維混沌系統
+- **兩種模式**:
+  - Smooth mode: 0.01-1.0 (連續變化)
+  - Stepped mode: 1.0-10.0 (階梯式變化)
+- **調變目標**: Delay time, Reverb decay
+- **位置**: `alien4_extension.cpp:126-156`
+
+#### 2. GrainProcessor (顆粒合成)
+- **16 並行 grains**: 獨立聲音顆粒處理
+- **8192 樣本緩衝**: 循環緩衝設計
+- **固定參數**:
+  - Position: 50% (固定)
+  - Chaos: Always on (固定)
+- **可調參數**:
+  - Size: 顆粒大小 (內建 50%)
+  - Density/Break: 顆粒密度 (內建 50%)
+  - Wet/Dry: 混合比例 (GUI 可調)
+- **位置**: `alien4_extension.cpp:161-295`
+
+#### 3. DelayProcessor (延遲效果)
+- **L/R 獨立 buffer**: 立體聲分離處理
+- **Chaos 調變**: 可選 chaos 調變 delay time
+- **參數**:
+  - Time L/R: 獨立左右延遲時間
+  - Feedback: 回饋量
+  - Chaos toggle: 開關 chaos 調變
+  - Wet/Dry: 混合比例
+- **位置**: `alien4_extension.cpp:476-524`
+
+#### 4. ReverbProcessor (殘響效果)
+- **8 comb filters**: 升級自原本的 4 個
+- **4 allpass filters**: Freeverb-style 架構
+- **Chaos 調變**: Chaos 影響 decay time
+- **參數**:
+  - Decay: 殘響時間
+  - Room/Tone: 固定最大值 (不在 GUI 顯示)
+  - Wet/Dry: 混合比例
+- **位置**: `alien4_extension.cpp:300-471`
+
+### 訊號鏈順序
+```
+Input → EQ → Chaos Generation → Delay (with chaos) → Grain → Reverb (with chaos) → Feedback → Output
+```
+
+### GUI 控制配置 (Column 5)
+**Delay 控制**:
+- Delay Time L: 0.001-2.0s
+- Delay Time R: 0.001-2.0s
+- Delay Feedback: 0-95%
+- Delay Wet: 0-100%
+
+**Reverb 控制**:
+- Reverb Decay: 0-100%
+- Reverb Wet: 0-100%
+
+**Chaos 控制**:
+- Chaos Rate: 0-100% (調變速率)
+- Chaos Shape: Smooth/Stepped toggle
+- Delay Chaos: On/Off toggle
+
+**Grain 控制**:
+- Grain Wet: 0-100%
+
+### 內建固定值
+- Chaos Amount: 100% (固定)
+- Grain Size: 50% (固定)
+- Grain Density: 50% (固定)
+- Grain Position: 50% (固定)
+- Grain Chaos: Always on (固定)
+- Reverb Room: 最大值 (固定)
+- Reverb Tone: 最大值 (固定)
+
+### Python Bindings 新增方法
+```python
+set_chaos_rate(rate)      # Chaos 速率
+set_chaos_amount(amount)  # Chaos 強度
+set_chaos_shape(shape)    # Chaos 模式
+set_delay_chaos(enabled)  # Delay chaos 開關
+set_reverb_chaos(enabled) # Reverb chaos 開關
+set_grain_size(size)      # Grain 大小
+set_grain_density(density)# Grain 密度
+set_grain_wet_dry(wet)    # Grain 混合
+```
+
+### 修改檔案
+- `alien4_extension.cpp`: C++ 效果器實作
+- `vav/audio/alien4_wrapper.py`: Python 包裝層
+- `vav/audio/audio_process.py`: 音訊處理整合
+- `vav/core/controller.py`: 控制器方法
+- `vav/gui/compact_main_window.py`: GUI 控制介面
+
+### 技術備註
+- 編譯輸出: `alien4.cpython-311-darwin.so` (216K)
+- 立體聲處理: L/R 獨立 grain processors
+- 音訊安全: 所有參數範圍檢查與 clamp
+
+---
+
 ## [2025-11-15] 最低亮度調整與 Frequency Compress 參數
 
 ### 最低亮度調整

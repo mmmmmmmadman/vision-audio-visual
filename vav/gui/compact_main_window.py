@@ -76,6 +76,10 @@ class CompactMainWindow(QMainWindow):
         # Set controller reference for CV Meter Window
         self.cv_meter_window.set_controller(self.controller)
 
+        # 設定固定的 Chaos 和 Grain 參數 (內建值)
+        self.controller.set_alien4_chaos_params(amount=1.0)  # Chaos Amount 固定 100%
+        self.controller.set_alien4_grain_params(size=0.5, density=0.5)  # Grain Size/Density 固定 50%
+
         # Setup MIDI Learn for Anchor XY in CV Meter Window
         self.cv_meter_window.setup_midi_learn(self.midi_learn)
 
@@ -944,6 +948,56 @@ class CompactMainWindow(QMainWindow):
         row = self._create_control_row("Reverb Wet", self.alien4_reverb_wet_slider, self.alien4_reverb_wet_label, LABEL_WIDTH)
         col5_layout.addLayout(row)
 
+        # 新增 Chaos 和 Grain 控制到 Col 5
+
+        # Chaos Rate (0-100%)
+        self.chaos_rate_slider = QSlider(Qt.Orientation.Horizontal)
+        self.chaos_rate_slider.setFixedHeight(16)
+        self.chaos_rate_slider.setFixedWidth(120)
+        self._apply_slider_style(self.chaos_rate_slider, COLOR_COL4)
+        self.chaos_rate_slider.setMinimum(0)
+        self.chaos_rate_slider.setMaximum(100)
+        self.chaos_rate_slider.setValue(1)  # 預設 0.01
+        self.chaos_rate_slider.valueChanged.connect(self._on_chaos_rate_changed)
+        self._make_slider_learnable(self.chaos_rate_slider, "chaos_rate", self._on_chaos_rate_changed)
+        self.chaos_rate_label = QLabel("1%")
+        self.chaos_rate_label.setFixedWidth(30)
+        row = self._create_control_row("Chaos Rate", self.chaos_rate_slider, self.chaos_rate_label, LABEL_WIDTH)
+        col5_layout.addLayout(row)
+
+        # Chaos Shape (toggle button)
+        self.chaos_shape_button = QPushButton("Shape: Smooth")
+        self.chaos_shape_button.setCheckable(True)
+        self.chaos_shape_button.setFixedHeight(24)
+        self.chaos_shape_button.setFixedWidth(120)
+        self.chaos_shape_button.clicked.connect(self._on_chaos_shape_changed)
+        row = self._create_control_row("", self.chaos_shape_button, QLabel(""), LABEL_WIDTH)
+        col5_layout.addLayout(row)
+
+        # Delay Chaos (toggle button)
+        self.delay_chaos_button = QPushButton("Delay Chaos")
+        self.delay_chaos_button.setCheckable(True)
+        self.delay_chaos_button.setFixedHeight(24)
+        self.delay_chaos_button.setFixedWidth(120)
+        self.delay_chaos_button.clicked.connect(self._on_delay_chaos_changed)
+        row = self._create_control_row("", self.delay_chaos_button, QLabel(""), LABEL_WIDTH)
+        col5_layout.addLayout(row)
+
+        # Grain Wet (0-100%)
+        self.grain_wet_slider = QSlider(Qt.Orientation.Horizontal)
+        self.grain_wet_slider.setFixedHeight(16)
+        self.grain_wet_slider.setFixedWidth(120)
+        self._apply_slider_style(self.grain_wet_slider, COLOR_COL4)
+        self.grain_wet_slider.setMinimum(0)
+        self.grain_wet_slider.setMaximum(100)
+        self.grain_wet_slider.setValue(0)  # 預設 0
+        self.grain_wet_slider.valueChanged.connect(self._on_grain_wet_changed)
+        self._make_slider_learnable(self.grain_wet_slider, "grain_wet", self._on_grain_wet_changed)
+        self.grain_wet_label = QLabel("0%")
+        self.grain_wet_label.setFixedWidth(30)
+        row = self._create_control_row("Grain Wet", self.grain_wet_slider, self.grain_wet_label, LABEL_WIDTH)
+        col5_layout.addLayout(row)
+
         # Add all column layouts to the horizontal box
         hbox.addLayout(col1_layout)
         hbox.addLayout(col2_layout)
@@ -1723,6 +1777,30 @@ class CompactMainWindow(QMainWindow):
         """Alien4 poly voices changed"""
         self.alien4_poly_label.setText(f"{value}")
         self.controller.set_alien4_documenta_params(poly=value)
+
+    # Chaos controls
+    def _on_chaos_rate_changed(self, value: int):
+        """Chaos rate changed"""
+        rate = value / 100.0
+        self.chaos_rate_label.setText(f"{value}%")
+        self.controller.set_alien4_chaos_params(rate=rate)
+
+    def _on_chaos_shape_changed(self, checked: bool):
+        """Chaos shape changed"""
+        shape_text = "Stepped" if checked else "Smooth"
+        self.chaos_shape_button.setText(f"Shape: {shape_text}")
+        self.controller.set_alien4_chaos_params(shape=checked)
+
+    def _on_delay_chaos_changed(self, checked: bool):
+        """Delay chaos toggle changed"""
+        self.controller.set_alien4_delay_params(chaos_enabled=checked)
+
+    # Grain controls
+    def _on_grain_wet_changed(self, value: int):
+        """Grain wet changed"""
+        wet = value / 100.0
+        self.grain_wet_label.setText(f"{value}%")
+        self.controller.set_alien4_grain_params(wet_dry=wet)
 
     # SD img2img controls
     def _on_sd_toggle(self, state: int):
