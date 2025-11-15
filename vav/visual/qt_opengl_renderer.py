@@ -291,8 +291,8 @@ class QtMultiverseRenderer(QOpenGLWidget):
             // waveValue is in ±10V range, only use positive values (0-10V maps to 0.0-1.0)
             float normalized = clamp(waveValue * 0.1 * intensities[ch], 0.0, 1.0);
 
-            // Apply minimum brightness of 10% when voltage is low
-            float displayValue = max(normalized, 0.1);
+            // Apply minimum brightness of 25% when voltage is low
+            float displayValue = max(normalized, 0.25);
 
             vec3 rgb = getChannelColor(ch);
             vec4 channelColor = vec4(rgb * displayValue, displayValue);

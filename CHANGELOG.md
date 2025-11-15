@@ -2,7 +2,14 @@
 
 ---
 
-## [2025-11-15] Frequency Compress 參數與 Channel Ratios 預設值調整
+## [2025-11-15] 最低亮度調整與 Frequency Compress 參數
+
+### 最低亮度調整
+- **最暗值從 10% 提升至 25%**:
+  - 原本最低亮度: 0.1 (10%)
+  - 新最低亮度: 0.25 (25%)
+  - 提升畫面整體對比度與視覺飽和度
+  - Shader 位置: `qt_opengl_renderer.py:295`
 
 ### Frequency Compress 固定值
 - **Compress 參數固定為 3.0**:
@@ -18,15 +25,9 @@
   - 對應 test_ratio_visualizer.py 測試程式中使用者偏好值
   - 讓初始條紋呈現更稀疏的視覺效果
 
-### 實作細節
-- `vav/core/controller.py:69`: channel_ratios 預設值改為 0.1
-- `vav/core/controller.py:661-662`: compress 固定值 3.0
-- `vav/visual/qt_opengl_renderer.py:90`: compress uniform
-- `vav/visual/qt_opengl_renderer.py:273-278`: shader compress 運算
-
 ### 修改檔案
+- `vav/visual/qt_opengl_renderer.py`: 最低亮度 0.25, compress shader 實作
 - `vav/core/controller.py`: channel_ratios 預設值, compress 固定值
-- `vav/visual/qt_opengl_renderer.py`: compress shader 實作
 - `vav/gui/compact_main_window.py`: 移除 compress slider
 
 ---
