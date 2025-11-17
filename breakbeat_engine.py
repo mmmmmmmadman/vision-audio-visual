@@ -9,7 +9,7 @@ import numpy as np
 import soundfile as sf
 import random
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Callable
+from typing import Dict, List, Optional, Callable, Tuple
 from scipy.signal import resample
 
 
@@ -74,6 +74,10 @@ class BreakBeatEngine:
 
         # Swing
         self.swing_amount = 0.0  # 0.0 = no swing, 0.33 = triplet feel
+
+        # Voice integration
+        self.voice_segments: List[Tuple[int, np.ndarray]] = []  # (step, audio) pairs
+        self.voice_enabled = False  # Use voice instead of drum samples for latin layer
 
         self._load_samples()
 
@@ -180,94 +184,126 @@ class BreakBeatEngine:
                 pattern[start:start+length] += audio[:length]
 
         if pattern_type == 'amen':
-            # Amen Break
-            add(0, self._get_sample('kick'))
-            add(0, self._get_sample('hihat', 'C'), 0.6)
-            add(2, self._get_sample('hihat', 'A'), 0.4)
+            # Amen Break with enhanced variations
+            add(0, self._get_sample('kick'), random.uniform(0.95, 1.1))
+            add(0, self._get_sample('hihat', 'C'), random.uniform(0.4, 0.7))
+            add(2, self._get_sample('hihat', 'A'), random.uniform(0.25, 0.5))
 
-            add(4, self._get_sample('snare'))
-            add(4, self._get_sample('hihat', 'C'), 0.6)
-            add(6, self._get_sample('hihat', 'A'), 0.3)
+            add(4, self._get_sample('snare'), random.uniform(0.9, 1.1))
+            add(4, self._get_sample('hihat', 'C'), random.uniform(0.4, 0.7))
+            add(6, self._get_sample('hihat', 'A'), random.uniform(0.2, 0.45))
 
-            add(8, self._get_sample('kick'), 0.9)
-            add(8, self._get_sample('hihat', 'C'), 0.6)
-            add(10, self._get_sample('kick'), 0.7)
-            add(10, self._get_sample('hihat', 'A'), 0.4)
+            add(8, self._get_sample('kick'), random.uniform(0.75, 1.0))
+            add(8, self._get_sample('hihat', 'C'), random.uniform(0.4, 0.7))
+            add(10, self._get_sample('kick'), random.uniform(0.55, 0.85))
+            add(10, self._get_sample('hihat', 'A'), random.uniform(0.25, 0.55))
 
-            add(12, self._get_sample('snare'))
-            add(13, self._get_sample('roll', 'H'), 0.8)
-            add(14, self._get_sample('snare', 'Stick'), 0.7)
-            add(12, self._get_sample('hihat', 'O'), 0.5)
+            add(12, self._get_sample('snare'), random.uniform(0.9, 1.1))
+            add(13, self._get_sample('roll', 'H'), random.uniform(0.6, 0.95))
+            add(14, self._get_sample('snare', 'Stick'), random.uniform(0.5, 0.85))
+            add(12, self._get_sample('hihat', 'O'), random.uniform(0.35, 0.65))
 
-            # Occasional crash
-            if random.random() < 0.125:
-                add(0, self._get_sample('crash'), 0.3)
+            # More frequent crash
+            if random.random() < 0.3:
+                add(0, self._get_sample('crash'), random.uniform(0.25, 0.4))
+
+            # More frequent variation hihat
+            if random.random() < 0.6:
+                add(random.choice([1, 3, 5, 7]), self._get_sample('hihat', 'C'), random.uniform(0.15, 0.4))
 
         elif pattern_type == 'jungle':
-            # Jungle/DnB
+            # Jungle/DnB with enhanced variations
             for step in [0, 6, 10, 13]:
-                add(step, self._get_sample('kick'), random.uniform(0.8, 1.0))
+                add(step, self._get_sample('kick'), random.uniform(0.7, 1.1))
 
-            add(4, self._get_sample('snare'))
-            add(12, self._get_sample('snare'))
+            add(4, self._get_sample('snare'), random.uniform(0.85, 1.15))
+            add(12, self._get_sample('snare'), random.uniform(0.85, 1.15))
 
             for step in range(0, 16, 2):
                 var = 'C' if step % 4 == 0 else 'A'
-                gain = 0.6 if step % 4 == 0 else 0.3
+                base_gain = 0.6 if step % 4 == 0 else 0.3
+                gain = base_gain * random.uniform(0.8, 1.3)
                 add(step, self._get_sample('hihat', var), gain)
 
-            if random.random() < 0.3:
-                add(14, self._get_sample('roll'), 0.6)
+            if random.random() < 0.6:
+                add(14, self._get_sample('roll'), random.uniform(0.4, 0.75))
+
+            # More frequent extra percussion
+            if random.random() < 0.5:
+                add(random.choice([7, 11, 15]), self._get_sample('hihat', 'A'), random.uniform(0.15, 0.4))
 
         elif pattern_type == 'techno':
-            # Techno - 4 on the floor with tight hihat
+            # Techno - 4 on the floor with enhanced variations
             # Kick on every beat
             for beat in [0, 4, 8, 12]:
-                add(beat, self._get_sample('kick', 'H'), 1.0)
+                add(beat, self._get_sample('kick', 'H'), random.uniform(0.9, 1.1))
 
             # Snare/clap on 2 and 4
-            add(4, self._get_sample('snare'), 0.7)
-            add(12, self._get_sample('snare'), 0.7)
+            add(4, self._get_sample('snare'), random.uniform(0.55, 0.85))
+            add(12, self._get_sample('snare'), random.uniform(0.55, 0.85))
 
             # Tight closed hihat on offbeats
             for step in [2, 6, 10, 14]:
-                add(step, self._get_sample('hihat', 'C'), 0.5)
+                add(step, self._get_sample('hihat', 'C'), random.uniform(0.35, 0.65))
 
             # 16th note hihat pattern for groove
             for step in [1, 3, 5, 7, 9, 11, 13, 15]:
-                if random.random() < 0.6:
-                    add(step, self._get_sample('hihat', 'C'), 0.3)
+                if random.random() < 0.7:
+                    add(step, self._get_sample('hihat', 'C'), random.uniform(0.2, 0.45))
 
-            # Occasional open hihat
-            if random.random() < 0.4:
-                add(6, self._get_sample('hihat', 'O'), 0.4)
+            # More frequent open hihat
+            if random.random() < 0.6:
+                add(6, self._get_sample('hihat', 'O'), random.uniform(0.3, 0.6))
 
-            # Ride for texture
-            if random.random() < 0.3:
+            # More frequent ride for texture
+            if random.random() < 0.5:
                 for step in [0, 8]:
-                    add(step, self._get_sample('ride'), 0.3)
+                    add(step, self._get_sample('ride'), random.uniform(0.2, 0.45))
+
+            # More frequent percussion accent
+            if random.random() < 0.4:
+                add(random.choice([7, 11, 15]), self._get_sample('hihat', 'O'), random.uniform(0.25, 0.55))
 
         else:  # boom_bap
-            # Boom Bap
-            add(0, self._get_sample('kick', 'H'))
-            add(8, self._get_sample('kick', 'H'))
+            # Boom Bap with enhanced variations
+            add(0, self._get_sample('kick', 'H'), random.uniform(0.9, 1.15))
+            add(8, self._get_sample('kick', 'H'), random.uniform(0.9, 1.15))
 
-            add(4, self._get_sample('snare', 'H'))
-            add(12, self._get_sample('snare', 'H'))
+            add(4, self._get_sample('snare', 'H'), random.uniform(0.85, 1.15))
+            add(12, self._get_sample('snare', 'H'), random.uniform(0.85, 1.15))
 
             for step in [0, 2, 4, 6, 8, 10, 12, 14]:
-                add(step, self._get_sample('hihat', 'C'), 0.5)
+                add(step, self._get_sample('hihat', 'C'), random.uniform(0.35, 0.65))
 
-            if random.random() < 0.5:
-                add(6, self._get_sample('kick', 'L'), 0.4)
-            if random.random() < 0.5:
-                add(14, self._get_sample('kick', 'L'), 0.5)
+            if random.random() < 0.7:
+                add(6, self._get_sample('kick', 'L'), random.uniform(0.25, 0.55))
+            if random.random() < 0.7:
+                add(14, self._get_sample('kick', 'L'), random.uniform(0.35, 0.65))
 
-        # Apply fill in (before rest)
+            # More frequent hihat variation
+            if random.random() < 0.6:
+                add(random.choice([1, 3, 5, 7, 9, 11, 13, 15]), self._get_sample('hihat', 'O'), random.uniform(0.15, 0.4))
+
+        # Add voice segments if enabled (overlay on main pattern)
+        if self.voice_enabled and self.voice_segments:
+            for step, voice_audio in self.voice_segments:
+                # Apply swing to off-beat steps
+                start = step * self.samples_per_step
+                if step % 2 == 1 and self.swing_amount > 0:
+                    swing_offset = int(self.swing_amount * self.samples_per_step)
+                    start += swing_offset
+
+                # Overlay voice (additive mixing)
+                length = min(len(voice_audio), self.pattern_length_samples - start)
+                if start < self.pattern_length_samples:
+                    end = start + length
+                    pattern[start:end] += voice_audio[:length] * 0.8  # 80% voice volume
+
+        # Apply fill in (affects both drums and voice)
         if self.fill_amount > 0 and self._should_add_fill():
             pattern = self._add_fill_to_pattern(pattern)
 
-        # Apply rest pattern (silence specific steps)
+        # Apply rest pattern (silence specific steps - affects both drums and voice)
         if self.rest_pattern:
             for rest_step in self.rest_pattern:
                 start = rest_step * self.samples_per_step
@@ -284,7 +320,7 @@ class BreakBeatEngine:
     def generate_latin_pattern(self, pattern_type: str = 'samba') -> np.ndarray:
         """
         Generate monophonic latin rhythm pattern
-        Uses random samples from all available drums
+        Uses ONLY drum samples (voice is handled in main pattern)
 
         Args:
             pattern_type: 'samba', 'bossa', or 'salsa'
@@ -294,6 +330,10 @@ class BreakBeatEngine:
         """
         pattern = np.zeros(self.pattern_length_samples, dtype=np.float32)
 
+        # NOTE: Voice overlay is handled in main pattern (generate_pattern)
+        # Latin pattern should ONLY contain drum samples to avoid double-layering
+
+        # Use drum samples
         if not self.all_samples:
             return pattern
 
@@ -339,6 +379,21 @@ class BreakBeatEngine:
             for step in steps:
                 gain = 0.85 if step in [0, 7] else random.uniform(0.5, 0.7)
                 add_mono(step, gain)
+
+        # Add voice segments if enabled (overlay on latin drums)
+        if self.voice_enabled and self.voice_segments:
+            for step, voice_audio in self.voice_segments:
+                # Apply swing to off-beat steps
+                start = step * self.samples_per_step
+                if step % 2 == 1 and self.swing_amount > 0:
+                    swing_offset = int(self.swing_amount * self.samples_per_step)
+                    start += swing_offset
+
+                # Overlay voice (additive mixing)
+                length = min(len(voice_audio), self.pattern_length_samples - start)
+                if start < self.pattern_length_samples:
+                    end = start + length
+                    pattern[start:end] += voice_audio[:length] * 0.8  # 80% voice volume
 
         # Apply rest pattern (silence specific steps) - same as main pattern
         if self.rest_pattern:
@@ -570,7 +625,13 @@ class BreakBeatEngine:
         # Start fill from end
         fill_start_step = 16 - fill_steps
 
-        # Clear fill region
+        # Save voice segments in fill region before clearing
+        voice_backup = None
+        if self.voice_enabled and self.voice_segments:
+            fill_start_sample = fill_start_step * self.samples_per_step
+            voice_backup = pattern[fill_start_sample:].copy()
+
+        # Clear fill region (drums only)
         fill_start_sample = fill_start_step * self.samples_per_step
         pattern[fill_start_sample:] = 0.0
 
@@ -618,6 +679,12 @@ class BreakBeatEngine:
                 if start < self.pattern_length_samples:
                     pattern[start:start+length] += audio[:length]
 
+        # Restore voice segments after fill
+        if voice_backup is not None:
+            fill_start_sample = fill_start_step * self.samples_per_step
+            # Re-add voice at 60% volume (same as in generate_pattern)
+            pattern[fill_start_sample:] += voice_backup * 0.6
+
         return pattern
 
     def set_fill_amount(self, amount: float):
@@ -627,6 +694,54 @@ class BreakBeatEngine:
     def set_swing_amount(self, amount: float):
         """Set swing amount (0.0 to 0.33)"""
         self.swing_amount = max(0.0, min(0.33, amount))
+
+    def set_voice_segments(self, segments: List[Tuple[int, np.ndarray]]):
+        """
+        設定語音片段用於 Latin layer
+
+        Args:
+            segments: List of (step, audio) tuples
+        """
+        self.voice_segments = segments
+        print(f"Voice segments loaded: {len(segments)} segments")
+
+    def set_voice_enabled(self, enabled: bool):
+        """
+        啟用/停用語音替換 Latin layer
+
+        Args:
+            enabled: True to use voice, False to use drum samples
+        """
+        self.voice_enabled = enabled
+        print(f"Voice enabled: {enabled}")
+
+    def load_voice_from_text(self, text: str, voice: str = "zh-TW-HsiaoChenNeural"):
+        """
+        從文字生成語音並載入片段
+
+        Args:
+            text: 要合成的文字
+            voice: TTS 語音選項
+        """
+        try:
+            from voice_segmenter import VoiceSegmenter
+
+            segmenter = VoiceSegmenter(sample_rate=self.sample_rate)
+
+            # 生成對齊的語音片段
+            segments = segmenter.generate_voice_pattern(
+                text=text,
+                step_duration=self.step_duration,
+                total_steps=16,
+                voice=voice
+            )
+
+            self.set_voice_segments(segments)
+            return True
+
+        except Exception as e:
+            print(f"Error loading voice: {e}")
+            return False
 
 
 def main():
