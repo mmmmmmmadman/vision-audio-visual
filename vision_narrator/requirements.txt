@@ -1,0 +1,26 @@
+# Vision Narrator Requirements
+
+# 基礎套件
+numpy>=1.24.0
+pillow>=10.0.0
+opencv-python>=4.8.0
+
+# 視覺模型 (擇一安裝)
+# 方案 A: MLX-VLM (推薦，Apple Silicon 優化)
+mlx>=0.5.0
+mlx-lm>=0.5.0
+mlx-vlm>=0.0.9
+
+# 方案 B: Transformers (通用)
+# transformers>=4.35.0
+# torch>=2.1.0
+# torchvision>=0.16.0
+
+# TTS 引擎 (擇一安裝)
+# 方案 A: Edge TTS (推薦，輕量)
+edge-tts>=6.1.0
+
+# 方案 B: Coqui TTS (高品質)
+# coqui-tts>=0.22.0
+
+# macOS 內建 say 指令不需安裝額外套件

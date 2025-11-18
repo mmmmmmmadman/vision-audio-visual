@@ -4,27 +4,23 @@ Vertical meter widget for CV signals (極簡風格)
 
 import numpy as np
 from PyQt6.QtWidgets import QWidget, QSizePolicy
-from PyQt6.QtCore import Qt, QRectF, QRect, pyqtSignal
+from PyQt6.QtCore import Qt, QRectF
 from PyQt6.QtGui import QPainter, QColor, QPen
-from ..utils.cv_colors import SCOPE_COLORS
 
 
 class MeterWidget(QWidget):
     """Minimalist vertical meter for CV visualization"""
 
-    # Signal emitted when mute state changes (channel_index, is_muted)
-    mute_changed = pyqtSignal(int, bool)
-
-    def __init__(self, num_channels: int = 6):
+    def __init__(self, num_channels: int = 5):
         """
         Initialize meter widget (horizontal layout)
 
         Args:
-            num_channels: Number of channels to display (6 = 4 ENV + 2 SEQ)
+            num_channels: Number of channels to display (5 = 3 ENV + 2 SEQ)
         """
         super().__init__()
         self.num_channels = num_channels
-        self.setMinimumHeight(100)  # 增加高度以容納 6 個 channels
+        self.setMinimumHeight(80)  # 水平排列高度較小
         self.setMinimumWidth(240)  # 最小寬度
 
         # 設置 size policy 讓 widget 可以水平擴展
@@ -38,17 +34,17 @@ class MeterWidget(QWidget):
         self.peak_hold_frames = np.zeros(num_channels, dtype=np.int32)
         self.peak_hold_duration = 10  # frames
 
-        # Colors from unified color scheme (ENV1-4, SEQ1-2)
-        self.colors = [QColor(*rgb) for rgb in SCOPE_COLORS]
+        # Colors matching contour CV generator
+        self.colors = [
+            QColor(255, 133, 133),  # ENV 1 - 粉色
+            QColor(255, 255, 255),  # ENV 2 - 白色
+            QColor(188, 0, 45),     # ENV 3 - 日本國旗紅
+            QColor(255, 255, 255),  # SEQ 1 - 白色
+            QColor(255, 255, 255),  # SEQ 2 - 白色
+        ]
 
         # Channel labels
-        self.labels = ["ENV1", "ENV2", "ENV3", "ENV4", "SEQ1", "SEQ2"]
-
-        # Mute state for each channel
-        self.muted = np.zeros(num_channels, dtype=bool)
-
-        # Mute button rectangles for click detection
-        self.mute_button_rects = []
+        self.labels = ["ENV1", "ENV2", "ENV3", "SEQ1", "SEQ2"]
 
         # Styling
         self.setStyleSheet("background-color: #000000;")
@@ -61,7 +57,6 @@ class MeterWidget(QWidget):
             samples: Array of values (0.0-1.0) for each channel
         """
         if len(samples) != self.num_channels:
-            print(f"METER DEBUG: Wrong length {len(samples)} != {self.num_channels}")
             return
 
         self.values = np.clip(samples, 0.0, 1.0)
@@ -81,24 +76,6 @@ class MeterWidget(QWidget):
 
         self.update()
 
-    def mousePressEvent(self, event):
-        """Handle mouse clicks for mute buttons"""
-        if event.button() == Qt.MouseButton.LeftButton:
-            pos = event.pos()
-            for i, rect in enumerate(self.mute_button_rects):
-                if rect.contains(pos):
-                    # Toggle mute state
-                    self.muted[i] = not self.muted[i]
-                    self.mute_changed.emit(i, bool(self.muted[i]))
-                    self.update()
-                    break
-
-    def set_mute(self, channel: int, muted: bool):
-        """Set mute state for a channel"""
-        if 0 <= channel < self.num_channels:
-            self.muted[channel] = muted
-            self.update()
-
     def paintEvent(self, event):
         """Paint the meters (horizontal layout)"""
         painter = QPainter(self)
@@ -108,62 +85,31 @@ class MeterWidget(QWidget):
         height = self.height()
 
         # Calculate meter dimensions (horizontal)
-        mute_button_size = 16
-        mute_button_margin = 5
         label_width = 40
         value_text_width = 50  # 右側數值顯示區域
         margin = 10
         meter_spacing = 20
         # meter 寬度填滿可用空間
-        available_width = width - mute_button_size - mute_button_margin - label_width - value_text_width - margin
+        available_width = width - label_width - value_text_width - margin
         meter_width = max(100, available_width)
         meter_height = 15  # 固定高度
 
         start_y = (height - meter_height * self.num_channels - meter_spacing * (self.num_channels - 1)) // 2
 
-        # Clear button rects
-        self.mute_button_rects = []
-
         for i in range(self.num_channels):
             y = start_y + i * (meter_height + meter_spacing)
 
-            # Draw mute button (left side)
-            button_x = 2
-            button_y = y + (meter_height - mute_button_size) // 2
-            button_rect = QRect(button_x, button_y, mute_button_size, mute_button_size)
-            self.mute_button_rects.append(button_rect)
-
-            # Button background
-            if self.muted[i]:
-                painter.setBrush(QColor(180, 60, 60))  # Red when muted
-                painter.setPen(QPen(QColor(200, 80, 80), 1))
-            else:
-                painter.setBrush(QColor(60, 60, 60))  # Gray when active
-                painter.setPen(QPen(QColor(100, 100, 100), 1))
-
-            painter.drawRect(button_x, button_y, mute_button_size, mute_button_size)
-
-            # Draw M text
-            painter.setPen(QPen(QColor(220, 220, 220), 1))
-            painter.drawText(
-                button_x, button_y,
-                mute_button_size, mute_button_size,
-                Qt.AlignmentFlag.AlignCenter,
-                "M"
-            )
-
-            # Draw label (after mute button)
-            label_x = button_x + mute_button_size + mute_button_margin
+            # Draw label (left side)
             painter.setPen(QPen(QColor(200, 200, 200), 1))
             painter.drawText(
-                label_x, y,
+                5, y,
                 label_width - 5, meter_height,
                 Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
                 self.labels[i]
             )
 
             # Meter starts after label
-            meter_x = label_x + label_width
+            meter_x = label_width
 
             # Draw background (dark gray)
             painter.setPen(QPen(QColor(60, 60, 60), 1))
@@ -188,10 +134,9 @@ class MeterWidget(QWidget):
                 painter.setPen(QPen(self.colors[i], 2))
                 painter.drawLine(peak_x, y, peak_x, y + meter_height)
 
-            # Draw value text (right side of meter) - display as voltage (0-10V)
+            # Draw value text (right side of meter)
             if self.values[i] > 0.01:
-                voltage = self.values[i] * 10.0  # Convert 0-1 to 0-10V
-                value_text = f"{voltage:.1f}V"
+                value_text = f"{self.values[i]:.2f}"
                 painter.setPen(QPen(self.colors[i], 1))
                 painter.drawText(
                     meter_x + meter_width + 5, y,

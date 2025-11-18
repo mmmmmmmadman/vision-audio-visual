@@ -1,0 +1,108 @@
+"""
+Webcam capture module
+"""
+
+import cv2
+import numpy as np
+from typing import Optional, Tuple, List, Dict
+import subprocess
+import json
+
+
+class Camera:
+    """Webcam capture handler"""
+
+    def __init__(self, device_id: int = 0, width: int = 1920, height: int = 1080, fps: int = 30):
+        self.device_id = device_id
+        self.width = width
+        self.height = height
+        self.fps = fps
+        self.cap: Optional[cv2.VideoCapture] = None
+        self.is_opened = False
+
+    def open(self) -> bool:
+        """Open camera device"""
+        self.cap = cv2.VideoCapture(self.device_id)
+        if not self.cap.isOpened():
+            return False
+
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+        self.cap.set(cv2.CAP_PROP_FPS, self.fps)
+
+        self.is_opened = True
+        return True
+
+    def read(self) -> Tuple[bool, Optional[np.ndarray]]:
+        """Read frame from camera"""
+        if not self.is_opened or self.cap is None:
+            return False, None
+
+        ret, frame = self.cap.read()
+        return ret, frame
+
+    def close(self):
+        """Close camera device"""
+        if self.cap is not None:
+            self.cap.release()
+            self.is_opened = False
+
+    def get_resolution(self) -> Tuple[int, int]:
+        """Get actual camera resolution"""
+        if self.cap is None:
+            return (0, 0)
+        w = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        return (w, h)
+
+    def __del__(self):
+        self.close()
+
+
+def get_camera_list() -> List[Dict]:
+    """
+    Get list of available cameras with their names
+    Returns list of dicts with 'index' and 'name' keys
+    """
+    cameras = []
+
+    # Try to get camera names using system_profiler on macOS
+    try:
+        import platform
+        if platform.system() == 'Darwin':
+            # Use system_profiler to get camera info on macOS
+            result = subprocess.run(
+                ['system_profiler', 'SPCameraDataType', '-json'],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.returncode == 0:
+                data = json.loads(result.stdout)
+                if 'SPCameraDataType' in data and len(data['SPCameraDataType']) > 0:
+                    for idx, cam_info in enumerate(data['SPCameraDataType']):
+                        name = cam_info.get('_name', f'Camera {idx}')
+                        cameras.append({'index': idx, 'name': name})
+    except Exception as e:
+        print(f"Failed to get camera names: {e}")
+
+    # Fallback: probe cameras using OpenCV
+    if not cameras:
+        for i in range(10):  # Check first 10 indices
+            cap = cv2.VideoCapture(i)
+            if cap.isOpened():
+                cameras.append({'index': i, 'name': f'Camera {i}'})
+                cap.release()
+            else:
+                break
+
+    return cameras
+
+
+def get_camera_name(device_id: int) -> str:
+    """Get camera name for a given device ID"""
+    cameras = get_camera_list()
+    for cam in cameras:
+        if cam['index'] == device_id:
+            return cam['name']
+    return f'Camera {device_id}'

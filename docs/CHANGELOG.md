@@ -2,6 +2,44 @@
 
 ---
 
+## [2025-11-18] CV Meter Mute 功能與專案整理
+
+### CV Meter Window 功能增強
+- **新增 Mute 按鈕**:
+  - 每個 CV meter 左側加入 M 按鈕
+  - 點擊切換 mute 狀態
+  - 視覺回饋: 灰色 (啟用) / 紅色 (靜音)
+  - 支援 6 個通道: ENV1-4, SEQ1-2
+
+### 實作細節
+- **修改檔案**:
+  - `vav/gui/meter_widget.py`: 加入 mute UI 與點擊處理
+  - `vav/gui/cv_meter_window.py`: 處理 mute 訊號傳遞
+  - `vav/core/controller.py`: 套用 mute 到 CV 輸出
+
+- **Mute 邏輯**:
+  - ENV1-4 mute 時: 不發送 trigger 事件
+  - SEQ1-2 mute 時: 輸出值設為 0.0
+  - 使用 numpy.bool 轉 Python bool 避免 PyQt signal 錯誤
+  - 使用 QRect 處理點擊區域檢測
+
+### 專案結構整理
+- **建立新目錄結構**:
+  - `related_projects/`: 存放 VAV_AudioEngine, VAV_variant
+  - `docs/`: 整合所有 markdown 文件
+  - `archived/`: 備份舊檔案
+
+- **新增文件**:
+  - `docs/FOLDER_STRUCTURE.md`: 資料夾結構說明
+  - `start_narrator.command`: Vision Narrator 啟動腳本
+
+- **啟動腳本改進**:
+  - 使用 vision_narrator 獨立 venv
+  - 背景執行不顯示 terminal 訊息
+  - 自動關閉 terminal 視窗
+
+---
+
 ## [2025-11-15] Ellen Ripley 效果器整合至 Alien4
 
 ### Alien4 音訊效果器架構升級

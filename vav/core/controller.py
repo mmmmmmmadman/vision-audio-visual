@@ -100,6 +100,7 @@ class VAVController:
         # CV generators (4 decay envelopes: ENV1-4)
         self.envelopes: List[DecayEnvelope] = []
         self.cv_values = np.zeros(6, dtype=np.float32)  # 6 CV outputs: ENV1-4, SEQ1-2
+        self.cv_muted = np.zeros(6, dtype=bool)  # Mute state for each CV channel
 
         # Envelope decay times (shadow copy for visual trigger rings)
         cv_config = self.config.get("cv", {})
@@ -754,6 +755,20 @@ class VAVController:
             env3_trigger = self.contour_cv_generator.env3_triggered
             env4_trigger = self.contour_cv_generator.env4_triggered
 
+            # 套用 mute 狀態 (channel 0-3: ENV1-4, channel 4-5: SEQ1-2)
+            if self.cv_muted[0]:
+                env1_trigger = False
+            if self.cv_muted[1]:
+                env2_trigger = False
+            if self.cv_muted[2]:
+                env3_trigger = False
+            if self.cv_muted[3]:
+                env4_trigger = False
+            if self.cv_muted[4]:
+                seq1_normalized = 0.0
+            if self.cv_muted[5]:
+                seq2_normalized = 0.0
+
             self.audio_process.send_cv_values(
                 seq1_normalized, seq2_normalized, scan_loop_completed,
                 env1_trigger, env2_trigger, env3_trigger, env4_trigger
@@ -917,6 +932,11 @@ class VAVController:
     def set_cv_callback(self, callback: Callable):
         """Set callback for CV updates"""
         self.cv_callback = callback
+
+    def set_cv_channel_mute(self, channel: int, muted: bool):
+        """Set mute state for a CV channel (0-5: ENV1-4, SEQ1-2)"""
+        if 0 <= channel < 6:
+            self.cv_muted[channel] = muted
 
     def set_visual_callback(self, callback: Callable):
         """Set callback for visual parameter updates"""

@@ -28,6 +28,7 @@ class CVMeterWindow(QMainWindow):
         # Meter widget (6 channels: ENV1-4, SEQ1-2)
         self.meter_widget = MeterWidget(num_channels=6)
         self.meter_widget.setMinimumHeight(180)
+        self.meter_widget.mute_changed.connect(self._on_mute_changed)
         layout.addWidget(self.meter_widget, stretch=1)
 
         # Bottom row: Range slider + Visual Preview
@@ -137,6 +138,13 @@ class CVMeterWindow(QMainWindow):
     def update_visual_preview(self, frame: np.ndarray):
         """更新 visual preview"""
         self.visual_preview.update_frame(frame)
+
+    def _on_mute_changed(self, channel: int, muted: bool):
+        """處理 mute 狀態改變"""
+        if self.controller:
+            # Channel mapping: 0-3=ENV1-4, 4-5=SEQ1-2
+            self.controller.set_cv_channel_mute(channel, muted)
+            print(f"CV Channel {channel} muted: {muted}")
 
     def clear(self):
         """清除所有 meters 和 preview"""
