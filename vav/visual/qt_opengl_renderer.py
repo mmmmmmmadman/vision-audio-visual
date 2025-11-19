@@ -102,9 +102,8 @@ class QtMultiverseRenderer(QOpenGLWidget):
     uniform float glitch_jitter_mod;  // POLY: modulation amount for ENV3 (0.0-1.0)
     uniform float glitch_seq1;  // Spatial complexity (SEQ1: 0.0-1.0)
     uniform float glitch_seq2;  // Temporal dynamics (SEQ2: 0.0-1.0)
-    uniform float region_brightness_weight;  // Ripley DELAY: brightness calculation weight (0.0-1.0)
-    uniform float region_threshold_curve;  // Ripley GRAIN: threshold distribution curve (0.0-1.0)
-    uniform float region_blur_amount;  // Ripley REVERB: region boundary blur (0.0-1.0)
+    uniform float region_threshold_curve;  // Ripley GRAIN: middle threshold offset (0.3-0.7)
+    uniform int region_layer_count;  // Ripley REVERB: layer subdivision within thresholds (1-4x)
     uniform float time_sec;  // Time in seconds for animated glitches
 
     in vec2 v_texcoord;
@@ -355,8 +354,6 @@ class QtMultiverseRenderer(QOpenGLWidget):
         glitched_uv = applyScanlineJitter(glitched_uv, glitch_env3, glitch_jitter_mod, glitch_seq1, glitch_seq2, time_sec);
 
         // Create region-specific UV with controllable distortion
-        // Mix between original and glitched UV based on glitch_mix
-        // This allows region boundaries to deform without adding GUI parameters
         vec2 region_uv = mix(v_texcoord, glitched_uv, glitch_mix);
 
         // Get region ID
@@ -366,29 +363,41 @@ class QtMultiverseRenderer(QOpenGLWidget):
                 // GPU-based region calculation from camera texture (with region distortion)
                 vec3 cameraColor = texture(camera_tex, vec2(region_uv.x, 1.0 - region_uv.y)).rgb;
 
-                // Dynamic brightness weight (Ripley DELAY)
-                // 0.0: equal weight (flat, no color bias)
-                // 1.0: extreme green emphasis (high contrast)
-                vec3 equal_weight = vec3(0.333, 0.333, 0.334);
-                vec3 extreme_weight = vec3(0.15, 0.75, 0.10);  // Strong green bias for high contrast
-                vec3 brightness_weight = mix(equal_weight, extreme_weight, region_brightness_weight);
+                // Standard brightness calculation
+                vec3 brightness_weight = vec3(0.299, 0.587, 0.114);  // ITU-R BT.601
                 float brightness_val = dot(cameraColor, brightness_weight);
 
-                // Dynamic brightness-based region with audio-driven thresholds and blur
-                // region_blur controls the transition width at boundaries
+                // Determine base region (always use thresholds)
                 int brightnessRegion;
                 if (brightness_val < region_thresholds.x) {
-                    brightnessRegion = 0;  // Darkest region
+                    brightnessRegion = 0;
                 } else if (brightness_val < region_thresholds.y) {
-                    brightnessRegion = 1;  // Medium-dark region
+                    brightnessRegion = 1;
                 } else if (brightness_val < region_thresholds.z) {
-                    brightnessRegion = 2;  // Medium-bright region
+                    brightnessRegion = 2;
                 } else {
-                    brightnessRegion = 3;  // Brightest region
+                    brightnessRegion = 3;
                 }
 
-                // Map brightness region to channel using region_channel_map
-                currentRegion = region_channel_map[brightnessRegion];
+                // If subdivision enabled (region_layer_count > 1), subdivide each region
+                if (region_layer_count > 1) {
+                    // Find region boundaries
+                    float regionStart = (brightnessRegion == 0) ? 0.0 : region_thresholds[brightnessRegion - 1];
+                    float regionEnd = (brightnessRegion == 3) ? 1.0 : region_thresholds[brightnessRegion];
+
+                    // Normalize brightness within this region (0.0-1.0)
+                    float normalizedBrightness = (brightness_val - regionStart) / (regionEnd - regionStart + 0.001);
+
+                    // Subdivide into region_layer_count sub-layers
+                    int subLayer = int(normalizedBrightness * float(region_layer_count));
+                    if (subLayer >= region_layer_count) subLayer = region_layer_count - 1;
+
+                    // Map to channel (cycle through 4 channels for sub-layers)
+                    currentRegion = (brightnessRegion + subLayer) % 4;
+                } else {
+                    // No subdivision, use direct mapping
+                    currentRegion = region_channel_map[brightnessRegion];
+                }
             } else {
                 // CPU-based region map from texture (use region_uv)
                 float regionVal = texture(region_tex, vec2(region_uv.x, 1.0 - region_uv.y)).r;
@@ -396,52 +405,8 @@ class QtMultiverseRenderer(QOpenGLWidget):
             }
         }
 
-        // Calculate channel blend weights for region boundaries (blur effect)
+        // Channel blend weights - disabled for now (blur removed)
         vec4 channelWeights = vec4(0.0);
-        if (use_region_map > 0 && use_gpu_region > 0 && region_blur_amount > 0.001) {
-            // Blur: calculate blend weights for each channel based on distance to boundaries (use region_uv)
-            vec3 cameraColor = texture(camera_tex, vec2(region_uv.x, 1.0 - region_uv.y)).rgb;
-
-            // Use same dynamic brightness weight as region calculation
-            vec3 equal_weight = vec3(0.333, 0.333, 0.334);
-            vec3 extreme_weight = vec3(0.15, 0.75, 0.10);  // Strong green bias for high contrast
-            vec3 brightness_weight = mix(equal_weight, extreme_weight, region_brightness_weight);
-            float brightness_val = dot(cameraColor, brightness_weight);
-
-            // Calculate distance to each threshold
-            float dist0 = abs(brightness_val - region_thresholds.x);
-            float dist1 = abs(brightness_val - region_thresholds.y);
-            float dist2 = abs(brightness_val - region_thresholds.z);
-
-            // Convert distances to weights (smoothstep for smooth transition)
-            // Channels closer to boundaries get blended with neighbors
-            for (int i = 0; i < 4; i++) {
-                float regionStart = (i == 0) ? 0.0 : region_thresholds[i-1];
-                float regionEnd = (i == 3) ? 1.0 : region_thresholds[i];
-                float regionCenter = (regionStart + regionEnd) * 0.5;
-                float regionWidth = regionEnd - regionStart;
-
-                // Distance from pixel to region center
-                float distToCenter = abs(brightness_val - regionCenter);
-                // Normalized distance (0 = center, 1 = boundary)
-                float normDist = distToCenter / (regionWidth * 0.5);
-
-                // Weight: 1.0 at center, fades to 0 at boundary based on blur amount
-                // region_blur_amount (Ripley REVERB) controls how wide the transition is
-                float blurWidth = region_blur_amount * 2.0;  // 0.0-1.0 -> 0.0-2.0
-                float weight = smoothstep(1.0, 1.0 - blurWidth, normDist);
-
-                // Map to actual channel using region_channel_map
-                int targetChannel = region_channel_map[i];
-                channelWeights[targetChannel] = weight;
-            }
-
-            // Normalize weights
-            float totalWeight = channelWeights[0] + channelWeights[1] + channelWeights[2] + channelWeights[3];
-            if (totalWeight > 0.001) {
-                channelWeights /= totalWeight;
-            }
-        }
 
         // Render and blend all channels
         vec4 result = vec4(0.0);
@@ -635,9 +600,8 @@ class QtMultiverseRenderer(QOpenGLWidget):
         self.glitch_start_time = time.time()  # Track time for animated glitches
 
         # Region control parameters (from Ellen Ripley)
-        self.region_brightness_weight = 0.5  # DELAY: brightness weight (0.0-1.0)
-        self.region_threshold_curve = 0.5  # GRAIN: threshold distribution curve (0.0-1.0)
-        self.region_blur_amount = 0.0  # REVERB: region blur (0.0-1.0)
+        self.region_threshold_curve = 0.5  # GRAIN: middle threshold offset (0.0-1.0 -> 0.3-0.7)
+        self.region_layer_count = 1  # REVERB: subdivision count (1-4x per region)
 
         # Overlay data (contours, scan point, rings)
         self.overlay_contour_points = []  # List of (x, y) in pixel coordinates
@@ -969,12 +933,10 @@ class QtMultiverseRenderer(QOpenGLWidget):
                         1, self.region_channel_map)
 
             # Region control parameters (Ripley)
-            glUniform1f(glGetUniformLocation(self.shader_program, b"region_brightness_weight"),
-                       self.region_brightness_weight)
             glUniform1f(glGetUniformLocation(self.shader_program, b"region_threshold_curve"),
                        self.region_threshold_curve)
-            glUniform1f(glGetUniformLocation(self.shader_program, b"region_blur_amount"),
-                       self.region_blur_amount)
+            glUniform1i(glGetUniformLocation(self.shader_program, b"region_layer_count"),
+                       self.region_layer_count)
 
             glUniform1f(glGetUniformLocation(self.shader_program, b"glitch_mix"),
                        self.glitch_mix)
@@ -1158,13 +1120,14 @@ class QtMultiverseRenderer(QOpenGLWidget):
             grain_val = alien4_params.get('grain_mix', 0.5)
             reverb_val = alien4_params.get('reverb_mix', 0.0)
 
-            # Map with enhanced ranges for more visible effects
-            self.region_brightness_weight = delay_val  # 0-1: brightness calculation weight
-            self.region_threshold_curve = grain_val  # 0-1: threshold distribution curve
-            self.region_blur_amount = reverb_val * 3.0  # 0-3: amplify blur effect (was 0-1)
+            # Map to region controls
+            # delay_mix: reserved for future use
+            self.region_threshold_curve = grain_val  # 0-1: middle threshold (maps to 0.3-0.7)
+            # reverb_mix controls subdivision: 0.0->1x (no subdivision), 1.0->4x (4 sub-layers per region)
+            self.region_layer_count = int(1 + reverb_val * 3)  # 1 to 4
 
             # DEBUG - print every time to see if values change
-            print(f"[Ripley] delay={delay_val:.3f} grain={grain_val:.3f} reverb={reverb_val:.3f}")
+            print(f"[Ripley] grain={grain_val:.3f} reverb={reverb_val:.3f} subdivision={self.region_layer_count}x")
 
             # DEBUG overlay data
             if not hasattr(self, '_overlay_debug_counter'):
@@ -1295,20 +1258,15 @@ class QtMultiverseRenderer(QOpenGLWidget):
             # Mode 3: Logarithmic distribution (curve = 1.0) - emphasize extremes
             log_thresholds = [0.1, 0.35, 0.9]  # More extreme distribution
 
-            # Mix between modes based on region_threshold_curve
-            curve = self.region_threshold_curve
-            if curve < 0.5:
-                # 0.0-0.5: blend linear to audio
-                t = curve * 2.0
-                self.region_thresholds[0] = linear_thresholds[0] * (1-t) + audio_thresholds[0] * t
-                self.region_thresholds[1] = linear_thresholds[1] * (1-t) + audio_thresholds[1] * t
-                self.region_thresholds[2] = linear_thresholds[2] * (1-t) + audio_thresholds[2] * t
-            else:
-                # 0.5-1.0: blend audio to logarithmic
-                t = (curve - 0.5) * 2.0
-                self.region_thresholds[0] = audio_thresholds[0] * (1-t) + log_thresholds[0] * t
-                self.region_thresholds[1] = audio_thresholds[1] * (1-t) + log_thresholds[1] * t
-                self.region_thresholds[2] = audio_thresholds[2] * (1-t) + log_thresholds[2] * t
+            # Direct threshold control (Ripley GRAIN controls middle threshold)
+            # First threshold: audio-driven
+            self.region_thresholds[0] = audio_thresholds[0]
+
+            # Middle threshold: directly controlled by grain_mix (0.3-0.7 range)
+            self.region_thresholds[1] = 0.3 + self.region_threshold_curve * 0.4
+
+            # Third threshold: audio-driven
+            self.region_thresholds[2] = audio_thresholds[2]
 
             self.region_thresholds[3] = 0.0  # Unused padding
 
