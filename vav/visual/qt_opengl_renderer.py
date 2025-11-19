@@ -7,6 +7,7 @@ import numpy as np
 from typing import List
 import threading
 import cv2
+import time
 from PyQt6.QtOpenGLWidgets import QOpenGLWidget
 from PyQt6.QtCore import QSize, Qt, pyqtSignal, QMutex, QMutexLocker
 from PyQt6.QtGui import QSurfaceFormat
@@ -89,6 +90,22 @@ class QtMultiverseRenderer(QOpenGLWidget):
     uniform float camera_mix;  // 0.0-1.0, blend strength for camera/SD input
     uniform float compress;  // Frequency compression ratio (0.1-10.0)
     uniform float color_scheme;  // 0.0-1.0 continuous blend between color schemes
+    uniform vec4 region_thresholds;  // Dynamic brightness thresholds for region boundaries
+    uniform ivec4 region_channel_map;  // Maps brightness regions to channels [0-3]
+    uniform float region_blur;  // Region boundary blur amount (controlled by ENV3)
+    uniform float glitch_mix;  // Global glitch amount (Alien4 mix)
+    uniform float glitch_env1;  // ENV1 value (0.0-1.0) - Region Tear strength
+    uniform float glitch_env2;  // ENV2 value (0.0-1.0) - Block Shuffle strength
+    uniform float glitch_env3;  // ENV3 value (0.0-1.0) - Scanline Jitter strength
+    uniform float glitch_tear_mod;  // FDBK: modulation amount for ENV1 (0.0-1.0)
+    uniform float glitch_shuffle_mod;  // SPEED: modulation amount for ENV2 (0.0-1.0)
+    uniform float glitch_jitter_mod;  // POLY: modulation amount for ENV3 (0.0-1.0)
+    uniform float glitch_seq1;  // Spatial complexity (SEQ1: 0.0-1.0)
+    uniform float glitch_seq2;  // Temporal dynamics (SEQ2: 0.0-1.0)
+    uniform float region_brightness_weight;  // Ripley DELAY: brightness calculation weight (0.0-1.0)
+    uniform float region_threshold_curve;  // Ripley GRAIN: threshold distribution curve (0.0-1.0)
+    uniform float region_blur_amount;  // Ripley REVERB: region boundary blur (0.0-1.0)
+    uniform float time_sec;  // Time in seconds for animated glitches
 
     in vec2 v_texcoord;
     out vec4 fragColor;
@@ -208,29 +225,221 @@ class QtMultiverseRenderer(QOpenGLWidget):
         return vec4(result, max(c1.a, c2.a));
     }
 
+    // Pseudo-random function for glitch effects
+    float hash(vec2 p) {
+        return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+    }
+
+    // Apply region tear glitch to UV coordinates
+    vec2 applyRegionTear(vec2 uv, float env_strength, float mod_amount, float spatial, float temporal, float time) {
+        // Calculate actual tear strength: ENV * modulation_amount
+        float tear_amount = env_strength * mod_amount;
+        if (tear_amount < 0.001 || glitch_mix < 0.001) return uv;
+
+        // SPATIAL (Seq1): Control stripe height (10%-30% of screen height)
+        // For 1080p: 3-10 large horizontal bars
+        float stripe_height = 0.1 + spatial * 0.2;  // 10%-30% height
+        float stripes_count = 1.0 / stripe_height;  // 3.3-10 stripes
+        float stripe_id = floor(uv.y * stripes_count);
+
+        // TEMPORAL (Seq2): Add time-based hash seed for evolving patterns
+        float time_seed = floor(time * temporal * 5.0);  // 0-5x speed based on Seq2
+        float stripe_hash = hash(vec2(stripe_id, time_seed));
+
+        // Maximum 10% of stripes get displaced
+        float displacement_threshold = 0.9;  // Only top 10% hash values trigger
+
+        if (stripe_hash > displacement_threshold) {
+            // Random displacement direction and amount
+            float noise = hash(vec2(stripe_id, time_seed + 1.0));
+            float direction = (noise > 0.5) ? 1.0 : -1.0;
+            float amount = hash(vec2(stripe_id, time_seed + 2.0));
+
+            // Larger displacement for bigger bars
+            float offset = direction * amount * tear_amount * glitch_mix * 0.8;
+            return vec2(uv.x + offset, uv.y);
+        }
+
+        return uv;
+    }
+
+    // Apply scanline jitter - subtle vertical and horizontal noise
+    vec2 applyScanlineJitter(vec2 uv, float env_strength, float mod_amount, float spatial, float temporal, float time) {
+        // Calculate actual jitter strength: ENV * modulation_amount
+        float jitter_amount = env_strength * mod_amount;
+        if (jitter_amount < 0.001 || glitch_mix < 0.001) return uv;
+
+        // SPATIAL (Seq1): Control scanline density (270-1080 lines)
+        float scanline_density = 270.0 + spatial * 810.0;
+        float scanline_id = floor(uv.y * scanline_density);
+
+        // TEMPORAL (Seq2): Control time speed (5.0-20.0x)
+        float time_speed = 5.0 + temporal * 15.0;
+        float jitter_noise = hash(vec2(scanline_id, floor(time * time_speed)));
+        float h_jitter = (jitter_noise - 0.5) * 0.003 * jitter_amount * glitch_mix;
+
+        // Vertical drift with temporal modulation
+        float drift_speed = 2.0 + temporal * 6.0;  // 2.0-8.0x
+        float v_drift = sin(scanline_id * 0.1 + time * drift_speed) * 0.0005 * jitter_amount * glitch_mix;
+
+        return vec2(uv.x + h_jitter, uv.y + v_drift);
+    }
+
+    // Apply block shuffle - random rectangular regions swap positions
+    vec2 applyBlockShuffle(vec2 uv, float env_strength, float mod_amount, float spatial, float temporal, float time) {
+        // Calculate actual shuffle strength: ENV * modulation_amount
+        float shuffle_speed = env_strength * mod_amount;
+        if (shuffle_speed < 0.001 || glitch_mix < 0.001) return uv;
+
+        // TEMPORAL (Seq2): Control time step speed
+        float time_multiplier = 1.0 + temporal * 3.0;  // 1.0-4.0x
+        float time_step = floor(time * shuffle_speed * 2.0 * time_multiplier);
+
+        // SPATIAL (Seq1): Control grid size with random aspect ratio for rectangles
+        float grid_base = 4.0 + spatial * 8.0;  // 4-12 base
+        float grid_variation = spatial * 8.0;   // 0-8 variation
+
+        // Create random aspect ratio for rectangles (not squares)
+        float aspect_hash = hash(vec2(time_step, 123.45));
+        float aspect_ratio = 0.3 + aspect_hash * 1.4;  // 0.3-1.7 aspect ratio
+
+        // Apply different grid sizes for X and Y to create rectangles
+        vec2 grid_size = vec2(
+            grid_base + mod(time_step, grid_variation),
+            (grid_base + mod(time_step + 1.0, grid_variation)) * aspect_ratio
+        );
+
+        vec2 block_id = floor(uv * grid_size);
+
+        // Each block has a random swap partner
+        float block_hash = hash(vec2(block_id.x, block_id.y) + vec2(time_step, 0.0));
+
+        // Maximum 5% of blocks get swapped (very low probability)
+        float swap_threshold = 0.95;  // Only top 5% hash values trigger
+
+        if (block_hash > swap_threshold) {
+            // Find swap partner block with random offset
+            vec2 partner_offset = vec2(
+                hash(vec2(block_id.x, block_id.y) + vec2(time_step, 1.0)) * 4.0 - 2.0,
+                hash(vec2(block_id.x, block_id.y) + vec2(time_step, 2.0)) * 4.0 - 2.0
+            );
+            vec2 partner_id = block_id + floor(partner_offset);
+
+            // Wrap partner to valid range
+            partner_id = mod(partner_id, grid_size);
+
+            // Calculate position within block
+            vec2 block_uv = fract(uv * grid_size);
+
+            // Swap to partner block position
+            vec2 swapped_uv = (partner_id + block_uv) / grid_size;
+
+            return swapped_uv;
+        }
+
+        return uv;
+    }
+
     void main() {
+        // Apply glitch effects in sequence
+        // New architecture: ENV controls strength, knobs control modulation amount
+        vec2 glitched_uv = v_texcoord;
+
+        // 1. Block shuffle: ENV2 strength * SPEED modulation
+        glitched_uv = applyBlockShuffle(glitched_uv, glitch_env2, glitch_shuffle_mod, glitch_seq1, glitch_seq2, time_sec);
+
+        // 2. Region tear: ENV1 strength * FDBK modulation
+        glitched_uv = applyRegionTear(glitched_uv, glitch_env1, glitch_tear_mod, glitch_seq1, glitch_seq2, time_sec);
+
+        // 3. Scanline jitter: ENV3 strength * POLY modulation
+        glitched_uv = applyScanlineJitter(glitched_uv, glitch_env3, glitch_jitter_mod, glitch_seq1, glitch_seq2, time_sec);
+
+        // Create region-specific UV with controllable distortion
+        // Mix between original and glitched UV based on glitch_mix
+        // This allows region boundaries to deform without adding GUI parameters
+        vec2 region_uv = mix(v_texcoord, glitched_uv, glitch_mix);
+
         // Get region ID
         int currentRegion = -1;
         if (use_region_map > 0) {
             if (use_gpu_region > 0) {
-                // GPU-based region calculation from camera texture
-                vec3 cameraColor = texture(camera_tex, vec2(v_texcoord.x, 1.0 - v_texcoord.y)).rgb;
-                float brightness_val = dot(cameraColor, vec3(0.299, 0.587, 0.114));  // RGB to grayscale
+                // GPU-based region calculation from camera texture (with region distortion)
+                vec3 cameraColor = texture(camera_tex, vec2(region_uv.x, 1.0 - region_uv.y)).rgb;
 
-                // Brightness-based region (4 levels)
-                if (brightness_val < 0.25) {
-                    currentRegion = 0;  // CH1: very dark
-                } else if (brightness_val < 0.5) {
-                    currentRegion = 1;  // CH2: medium dark
-                } else if (brightness_val < 0.75) {
-                    currentRegion = 2;  // CH3: medium bright
+                // Dynamic brightness weight (Ripley DELAY)
+                // 0.0: equal weight (0.33, 0.33, 0.33)
+                // 1.0: standard ITU-R BT.601 (0.299, 0.587, 0.114)
+                vec3 equal_weight = vec3(0.333, 0.333, 0.334);
+                vec3 standard_weight = vec3(0.299, 0.587, 0.114);
+                vec3 brightness_weight = mix(equal_weight, standard_weight, region_brightness_weight);
+                float brightness_val = dot(cameraColor, brightness_weight);
+
+                // Dynamic brightness-based region with audio-driven thresholds and blur
+                // region_blur controls the transition width at boundaries
+                int brightnessRegion;
+                if (brightness_val < region_thresholds.x) {
+                    brightnessRegion = 0;  // Darkest region
+                } else if (brightness_val < region_thresholds.y) {
+                    brightnessRegion = 1;  // Medium-dark region
+                } else if (brightness_val < region_thresholds.z) {
+                    brightnessRegion = 2;  // Medium-bright region
                 } else {
-                    currentRegion = 3;  // CH4: very bright
+                    brightnessRegion = 3;  // Brightest region
                 }
+
+                // Map brightness region to channel using region_channel_map
+                currentRegion = region_channel_map[brightnessRegion];
             } else {
-                // CPU-based region map from texture
-                float regionVal = texture(region_tex, vec2(v_texcoord.x, 1.0 - v_texcoord.y)).r;
+                // CPU-based region map from texture (use region_uv)
+                float regionVal = texture(region_tex, vec2(region_uv.x, 1.0 - region_uv.y)).r;
                 currentRegion = int(regionVal * 255.0);
+            }
+        }
+
+        // Calculate channel blend weights for region boundaries (blur effect)
+        vec4 channelWeights = vec4(0.0);
+        if (use_region_map > 0 && use_gpu_region > 0 && region_blur_amount > 0.001) {
+            // Blur: calculate blend weights for each channel based on distance to boundaries (use region_uv)
+            vec3 cameraColor = texture(camera_tex, vec2(region_uv.x, 1.0 - region_uv.y)).rgb;
+
+            // Use same dynamic brightness weight as region calculation
+            vec3 equal_weight = vec3(0.333, 0.333, 0.334);
+            vec3 standard_weight = vec3(0.299, 0.587, 0.114);
+            vec3 brightness_weight = mix(equal_weight, standard_weight, region_brightness_weight);
+            float brightness_val = dot(cameraColor, brightness_weight);
+
+            // Calculate distance to each threshold
+            float dist0 = abs(brightness_val - region_thresholds.x);
+            float dist1 = abs(brightness_val - region_thresholds.y);
+            float dist2 = abs(brightness_val - region_thresholds.z);
+
+            // Convert distances to weights (smoothstep for smooth transition)
+            // Channels closer to boundaries get blended with neighbors
+            for (int i = 0; i < 4; i++) {
+                float regionStart = (i == 0) ? 0.0 : region_thresholds[i-1];
+                float regionEnd = (i == 3) ? 1.0 : region_thresholds[i];
+                float regionCenter = (regionStart + regionEnd) * 0.5;
+                float regionWidth = regionEnd - regionStart;
+
+                // Distance from pixel to region center
+                float distToCenter = abs(brightness_val - regionCenter);
+                // Normalized distance (0 = center, 1 = boundary)
+                float normDist = distToCenter / (regionWidth * 0.5);
+
+                // Weight: 1.0 at center, fades to 0 at boundary based on blur amount
+                // region_blur_amount (Ripley REVERB) controls how wide the transition is
+                float blurWidth = region_blur_amount * 2.0;  // 0.0-1.0 -> 0.0-2.0
+                float weight = smoothstep(1.0, 1.0 - blurWidth, normDist);
+
+                // Map to actual channel using region_channel_map
+                int targetChannel = region_channel_map[i];
+                channelWeights[targetChannel] = weight;
+            }
+
+            // Normalize weights
+            float totalWeight = channelWeights[0] + channelWeights[1] + channelWeights[2] + channelWeights[3];
+            if (totalWeight > 0.001) {
+                channelWeights /= totalWeight;
             }
         }
 
@@ -241,11 +450,23 @@ class QtMultiverseRenderer(QOpenGLWidget):
         for (int ch = 0; ch < 4; ch++) {
             if (enabled_mask[ch] < 0.5) continue;
 
-            // Apply region filtering: skip channels not in this region
-            if (use_region_map > 0 && ch != currentRegion) {
-                continue;  // Skip this channel entirely, don't blend with black
+            // Apply region filtering or blend weights
+            float channelMix = 1.0;
+            if (use_region_map > 0) {
+                if (region_blur > 0.001 && use_gpu_region > 0) {
+                    // Blur mode: use blend weights
+                    channelMix = channelWeights[ch];
+                    if (channelMix < 0.001) continue;  // Skip if weight too low
+                } else {
+                    // Sharp mode: only render if this is the current region
+                    if (ch != currentRegion) {
+                        continue;
+                    }
+                }
             }
 
+            // Use original v_texcoord for audio waveform rendering (no glitch on waveform)
+            // Only region boundaries will be affected by glitch via region_uv
             vec2 uv = v_texcoord;
             float curve = curves[ch];
             float angle = angles[ch];
@@ -294,6 +515,9 @@ class QtMultiverseRenderer(QOpenGLWidget):
             // Apply minimum brightness of 25% when voltage is low
             float displayValue = max(normalized, 0.25);
 
+            // Apply channel mix weight for region blur
+            displayValue *= channelMix;
+
             vec3 rgb = getChannelColor(ch);
             vec4 channelColor = vec4(rgb * displayValue, displayValue);
 
@@ -328,6 +552,8 @@ class QtMultiverseRenderer(QOpenGLWidget):
 
         // Apply brightness after all blending
         result.rgb *= brightness;
+
+        // RGB split removed - glitch effects only apply to region boundaries, not audio waveforms
 
         fragColor = vec4(result.rgb, 1.0);
     }
@@ -395,6 +621,23 @@ class QtMultiverseRenderer(QOpenGLWidget):
         self.use_gpu_region = 0  # 0=CPU region (region_tex), 1=GPU region (camera_tex)
         self.camera_frame_data = None  # Camera frame for GPU region calculation
         self.camera_blend_frame_data = None  # Camera/SD frame for GPU blending
+
+        # Dynamic region control
+        self.region_thresholds = np.array([0.25, 0.5, 0.75, 0.0], dtype=np.float32)  # 3 boundaries + padding
+        self.region_channel_map = np.array([0, 1, 2, 3], dtype=np.int32)  # Default mapping
+        self.region_blur = 0.0  # Region boundary blur (fixed or controlled by other parameters)
+
+        # Glitch parameters (from Alien4)
+        self.glitch_mix = 0.0  # Global glitch amount (0.0-1.0)
+        self.glitch_tear = 0.0  # Region tear strength (feedback)
+        self.glitch_swap_speed = 1.0  # Region swap frequency (speed)
+        self.glitch_rgb_split = 0.0  # RGB split strength (poly)
+        self.glitch_start_time = time.time()  # Track time for animated glitches
+
+        # Region control parameters (from Ellen Ripley)
+        self.region_brightness_weight = 0.5  # DELAY: brightness weight (0.0-1.0)
+        self.region_threshold_curve = 0.5  # GRAIN: threshold distribution curve (0.0-1.0)
+        self.region_blur_amount = 0.0  # REVERB: region blur (0.0-1.0)
 
         # Overlay data (contours, scan point, rings)
         self.overlay_contour_points = []  # List of (x, y) in pixel coordinates
@@ -720,6 +963,59 @@ class QtMultiverseRenderer(QOpenGLWidget):
                        self.compress)
             glUniform1f(glGetUniformLocation(self.shader_program, b"color_scheme"),
                        self.color_scheme)
+            glUniform4fv(glGetUniformLocation(self.shader_program, b"region_thresholds"),
+                        1, self.region_thresholds)
+            glUniform4iv(glGetUniformLocation(self.shader_program, b"region_channel_map"),
+                        1, self.region_channel_map)
+
+            # Region control parameters (Ripley)
+            glUniform1f(glGetUniformLocation(self.shader_program, b"region_brightness_weight"),
+                       self.region_brightness_weight)
+            glUniform1f(glGetUniformLocation(self.shader_program, b"region_threshold_curve"),
+                       self.region_threshold_curve)
+            glUniform1f(glGetUniformLocation(self.shader_program, b"region_blur_amount"),
+                       self.region_blur_amount)
+
+            glUniform1f(glGetUniformLocation(self.shader_program, b"glitch_mix"),
+                       self.glitch_mix)
+
+            # New glitch architecture: ENV values and modulation amounts
+            # ENV1-3 from CV values (index 0-2), default to 0.5
+            env1_val = 0.5
+            env2_val = 0.5
+            env3_val = 0.5
+            seq1_val = 0.5
+            seq2_val = 0.5
+            if self.overlay_cv_values is not None and len(self.overlay_cv_values) >= 6:
+                env1_val = np.clip(self.overlay_cv_values[0], 0.0, 1.0)  # ENV1
+                env2_val = np.clip(self.overlay_cv_values[1], 0.0, 1.0)  # ENV2
+                env3_val = np.clip(self.overlay_cv_values[2], 0.0, 1.0)  # ENV3
+                seq1_val = np.clip(self.overlay_cv_values[4], 0.0, 1.0)  # SEQ1
+                seq2_val = np.clip(self.overlay_cv_values[5], 0.0, 1.0)  # SEQ2
+
+            # ENV values (glitch strengths)
+            glUniform1f(glGetUniformLocation(self.shader_program, b"glitch_env1"),
+                       env1_val)
+            glUniform1f(glGetUniformLocation(self.shader_program, b"glitch_env2"),
+                       env2_val)
+            glUniform1f(glGetUniformLocation(self.shader_program, b"glitch_env3"),
+                       env3_val)
+
+            # Modulation amounts from Alien4 knobs
+            glUniform1f(glGetUniformLocation(self.shader_program, b"glitch_tear_mod"),
+                       self.glitch_tear)  # FDBK knob
+            glUniform1f(glGetUniformLocation(self.shader_program, b"glitch_shuffle_mod"),
+                       self.glitch_swap_speed)  # SPEED knob
+            glUniform1f(glGetUniformLocation(self.shader_program, b"glitch_jitter_mod"),
+                       self.glitch_rgb_split)  # POLY knob
+
+            # SEQ values (spatial and temporal complexity)
+            glUniform1f(glGetUniformLocation(self.shader_program, b"glitch_seq1"),
+                       seq1_val)
+            glUniform1f(glGetUniformLocation(self.shader_program, b"glitch_seq2"),
+                       seq2_val)
+            glUniform1f(glGetUniformLocation(self.shader_program, b"time_sec"),
+                       time.time() - self.glitch_start_time)
 
             # Bind textures and draw Multiverse
             glActiveTexture(GL_TEXTURE0)
@@ -844,6 +1140,31 @@ class QtMultiverseRenderer(QOpenGLWidget):
             self.overlay_rings = overlay_data.get('rings', [])
             self.overlay_cv_values = overlay_data.get('cv_values', None)
 
+            # Handle Alien4 glitch parameters
+            alien4_params = overlay_data.get('alien4_params', {})
+            if not hasattr(self, '_alien4_debug_counter'):
+                self._alien4_debug_counter = 0
+            self._alien4_debug_counter += 1
+            if self._alien4_debug_counter % 50 == 1:
+                print(f"[Renderer] alien4_params received: {alien4_params}")
+
+            self.glitch_mix = alien4_params.get('mix', 0.0)
+            self.glitch_tear = alien4_params.get('feedback', 0.0)
+            self.glitch_swap_speed = alien4_params.get('speed', 1.0)
+            self.glitch_rgb_split = alien4_params.get('poly', 0.0)
+
+            # Ripley parameters (delay_mix, grain_mix, reverb_mix)
+            delay_val = alien4_params.get('delay_mix', 0.5)
+            grain_val = alien4_params.get('grain_mix', 0.5)
+            reverb_val = alien4_params.get('reverb_mix', 0.0)
+
+            self.region_brightness_weight = delay_val
+            self.region_threshold_curve = grain_val
+            self.region_blur_amount = reverb_val
+
+            # DEBUG - print every time to see if values change
+            print(f"[Ripley] delay={delay_val:.3f} grain={grain_val:.3f} reverb={reverb_val:.3f}")
+
             # DEBUG overlay data
             if not hasattr(self, '_overlay_debug_counter'):
                 self._overlay_debug_counter = 0
@@ -921,13 +1242,18 @@ class QtMultiverseRenderer(QOpenGLWidget):
                       f"curve={ch_data.get('curve', 0.0):.3f}, "
                       f"angle={ch_data.get('angle', 0.0):.1f}")
 
+        # Collect intensity values for dynamic region thresholds
+        channel_intensities = []
+
         for i in range(min(4, len(channels_data))):
             ch_data = channels_data[i]
             if not ch_data.get('enabled', False):
+                channel_intensities.append(0.0)
                 continue
 
             audio = ch_data.get('audio', np.array([]))
             if len(audio) == 0:
+                channel_intensities.append(0.0)
                 continue
 
             # Resample to width and scale to ±10V range (shader expects ±10V)
@@ -939,11 +1265,56 @@ class QtMultiverseRenderer(QOpenGLWidget):
                 self.audio_data[i] = audio * 25.0  # Scale ±1.0 to ±25.0 (clamped in shader)
 
             self.frequencies[i] = ch_data.get('frequency', 440.0)
-            self.intensities[i] = ch_data.get('intensity', 1.0)
+            intensity = ch_data.get('intensity', 1.0)
+            self.intensities[i] = intensity
+            channel_intensities.append(intensity)
             self.curves[i] = ch_data.get('curve', 0.0)
             self.angles[i] = ch_data.get('angle', 0.0)
             self.ratios[i] = ch_data.get('ratio', 1.0)
             self.enabled_mask[i] = 1.0
+
+        # Update dynamic region thresholds based on audio intensities
+        # region_threshold_curve (Ripley GRAIN) controls distribution
+        # 0.0 = linear equal split, 0.5 = audio-driven, 1.0 = logarithmic emphasis
+        if self.use_gpu_region and len(channel_intensities) == 4:
+            # Calculate three distribution modes
+
+            # Mode 1: Linear equal split (curve = 0.0)
+            linear_thresholds = [0.25, 0.5, 0.75]
+
+            # Mode 2: Audio intensity driven (curve = 0.5)
+            total_intensity = sum(channel_intensities) + 0.001
+            norm_intensities = [i / total_intensity for i in channel_intensities]
+            audio_thresholds = [
+                norm_intensities[0],
+                norm_intensities[0] + norm_intensities[1],
+                norm_intensities[0] + norm_intensities[1] + norm_intensities[2]
+            ]
+
+            # Mode 3: Logarithmic distribution (curve = 1.0) - emphasize extremes
+            log_thresholds = [0.15, 0.45, 0.85]
+
+            # Mix between modes based on region_threshold_curve
+            curve = self.region_threshold_curve
+            if curve < 0.5:
+                # 0.0-0.5: blend linear to audio
+                t = curve * 2.0
+                self.region_thresholds[0] = linear_thresholds[0] * (1-t) + audio_thresholds[0] * t
+                self.region_thresholds[1] = linear_thresholds[1] * (1-t) + audio_thresholds[1] * t
+                self.region_thresholds[2] = linear_thresholds[2] * (1-t) + audio_thresholds[2] * t
+            else:
+                # 0.5-1.0: blend audio to logarithmic
+                t = (curve - 0.5) * 2.0
+                self.region_thresholds[0] = audio_thresholds[0] * (1-t) + log_thresholds[0] * t
+                self.region_thresholds[1] = audio_thresholds[1] * (1-t) + log_thresholds[1] * t
+                self.region_thresholds[2] = audio_thresholds[2] * (1-t) + log_thresholds[2] * t
+
+            self.region_thresholds[3] = 0.0  # Unused padding
+
+        # Region blur is now controlled by a fixed value or other parameters
+        # ENV3 and ENV4 are now used for glitch control instead
+        # ENV3 → Scanline Jitter strength
+        # ENV4 → (currently unused, available for future features)
 
         # Trigger paintGL (OpenGL calls in GUI thread)
         self.update()
@@ -988,9 +1359,13 @@ class QtMultiverseRenderer(QOpenGLWidget):
             if overlay_data is not None:
                 self.pending_overlay_data = {
                     'contour_points': list(overlay_data.get('contour_points', [])),
+                    'contour_brightness': list(overlay_data.get('contour_brightness', [])),
                     'scan_point': overlay_data.get('scan_point', None),
                     'rings': list(overlay_data.get('rings', [])),
-                    'cv_values': overlay_data.get('cv_values', None)
+                    'roi_center': overlay_data.get('roi_center', None),
+                    'roi_radius': overlay_data.get('roi_radius', None),
+                    'cv_values': overlay_data.get('cv_values', None),
+                    'alien4_params': overlay_data.get('alien4_params', {}).copy()  # Copy alien4 params!
                 }
             else:
                 self.pending_overlay_data = None

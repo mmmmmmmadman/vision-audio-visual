@@ -1756,10 +1756,10 @@ class CompactMainWindow(QMainWindow):
         self.controller.set_alien4_delay_params(feedback=fb)
 
     def _on_alien4_delay_wet_changed(self, value: int):
-        """Alien4 delay wet changed"""
+        """Alien4 delay wet changed (Ellen Ripley)"""
         wet = value / 100.0
         self.alien4_delay_wet_label.setText(f"{value}%")
-        self.controller.set_alien4_delay_params(wet_dry=wet)
+        self.controller.set_ellen_ripley_delay_params(wet_dry=wet)
 
     def _on_alien4_reverb_decay_changed(self, value: int):
         """Alien4 reverb decay changed"""
@@ -1768,10 +1768,10 @@ class CompactMainWindow(QMainWindow):
         self.controller.set_alien4_reverb_params(decay=decay)
 
     def _on_alien4_reverb_wet_changed(self, value: int):
-        """Alien4 reverb wet changed"""
+        """Alien4 reverb wet changed (Ellen Ripley)"""
         wet = value / 100.0
         self.alien4_reverb_wet_label.setText(f"{value}%")
-        self.controller.set_alien4_reverb_params(wet_dry=wet)
+        self.controller.set_ellen_ripley_reverb_params(wet_dry=wet)
 
     def _on_alien4_poly_changed(self, value: int):
         """Alien4 poly voices changed"""
@@ -1797,10 +1797,10 @@ class CompactMainWindow(QMainWindow):
 
     # Grain controls
     def _on_grain_wet_changed(self, value: int):
-        """Grain wet changed"""
+        """Grain wet changed (Ellen Ripley)"""
         wet = value / 100.0
         self.grain_wet_label.setText(f"{value}%")
-        self.controller.set_alien4_grain_params(wet_dry=wet)
+        self.controller.set_ellen_ripley_grain_params(wet_dry=wet)
 
     # SD img2img controls
     def _on_sd_toggle(self, state: int):
