@@ -367,11 +367,11 @@ class QtMultiverseRenderer(QOpenGLWidget):
                 vec3 cameraColor = texture(camera_tex, vec2(region_uv.x, 1.0 - region_uv.y)).rgb;
 
                 // Dynamic brightness weight (Ripley DELAY)
-                // 0.0: equal weight (0.33, 0.33, 0.33)
-                // 1.0: standard ITU-R BT.601 (0.299, 0.587, 0.114)
+                // 0.0: equal weight (flat, no color bias)
+                // 1.0: extreme green emphasis (high contrast)
                 vec3 equal_weight = vec3(0.333, 0.333, 0.334);
-                vec3 standard_weight = vec3(0.299, 0.587, 0.114);
-                vec3 brightness_weight = mix(equal_weight, standard_weight, region_brightness_weight);
+                vec3 extreme_weight = vec3(0.15, 0.75, 0.10);  // Strong green bias for high contrast
+                vec3 brightness_weight = mix(equal_weight, extreme_weight, region_brightness_weight);
                 float brightness_val = dot(cameraColor, brightness_weight);
 
                 // Dynamic brightness-based region with audio-driven thresholds and blur
@@ -404,8 +404,8 @@ class QtMultiverseRenderer(QOpenGLWidget):
 
             // Use same dynamic brightness weight as region calculation
             vec3 equal_weight = vec3(0.333, 0.333, 0.334);
-            vec3 standard_weight = vec3(0.299, 0.587, 0.114);
-            vec3 brightness_weight = mix(equal_weight, standard_weight, region_brightness_weight);
+            vec3 extreme_weight = vec3(0.15, 0.75, 0.10);  // Strong green bias for high contrast
+            vec3 brightness_weight = mix(equal_weight, extreme_weight, region_brightness_weight);
             float brightness_val = dot(cameraColor, brightness_weight);
 
             // Calculate distance to each threshold
@@ -1158,9 +1158,10 @@ class QtMultiverseRenderer(QOpenGLWidget):
             grain_val = alien4_params.get('grain_mix', 0.5)
             reverb_val = alien4_params.get('reverb_mix', 0.0)
 
-            self.region_brightness_weight = delay_val
-            self.region_threshold_curve = grain_val
-            self.region_blur_amount = reverb_val
+            # Map with enhanced ranges for more visible effects
+            self.region_brightness_weight = delay_val  # 0-1: brightness calculation weight
+            self.region_threshold_curve = grain_val  # 0-1: threshold distribution curve
+            self.region_blur_amount = reverb_val * 3.0  # 0-3: amplify blur effect (was 0-1)
 
             # DEBUG - print every time to see if values change
             print(f"[Ripley] delay={delay_val:.3f} grain={grain_val:.3f} reverb={reverb_val:.3f}")
@@ -1292,7 +1293,7 @@ class QtMultiverseRenderer(QOpenGLWidget):
             ]
 
             # Mode 3: Logarithmic distribution (curve = 1.0) - emphasize extremes
-            log_thresholds = [0.15, 0.45, 0.85]
+            log_thresholds = [0.1, 0.35, 0.9]  # More extreme distribution
 
             # Mix between modes based on region_threshold_curve
             curve = self.region_threshold_curve
