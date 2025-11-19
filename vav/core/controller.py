@@ -636,6 +636,7 @@ class VAVController:
             # Extract overlay data from contour_cv_generator
             overlay_data = {
                 'contour_points': self.contour_cv_generator.contour_points,
+                'contour_brightness': self.contour_cv_generator.contour_brightness,
                 'scan_point': self.contour_cv_generator.current_scan_pos,
                 'rings': self.contour_cv_generator.trigger_rings,
                 'roi_center': (self.contour_cv_generator.anchor_x_pct / 100.0,

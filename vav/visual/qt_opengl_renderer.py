@@ -398,6 +398,7 @@ class QtMultiverseRenderer(QOpenGLWidget):
 
         # Overlay data (contours, scan point, rings)
         self.overlay_contour_points = []  # List of (x, y) in pixel coordinates
+        self.overlay_contour_brightness = []  # List of brightness values 0-1 for each contour point
         self.overlay_scan_point = None  # (x, y) in pixel coordinates
         self.overlay_rings = []  # List of {pos: (x,y), radius: float, color: (r,g,b), alpha: float}
         self.overlay_cv_values = None  # CV values for dashboard (6 values: ENV1-4, SEQ1-2)
@@ -838,6 +839,7 @@ class QtMultiverseRenderer(QOpenGLWidget):
         # Handle overlay data
         if overlay_data is not None:
             self.overlay_contour_points = overlay_data.get('contour_points', [])
+            self.overlay_contour_brightness = overlay_data.get('contour_brightness', [])
             self.overlay_scan_point = overlay_data.get('scan_point', None)
             self.overlay_rings = overlay_data.get('rings', [])
             self.overlay_cv_values = overlay_data.get('cv_values', None)
@@ -851,6 +853,7 @@ class QtMultiverseRenderer(QOpenGLWidget):
                 self._overlay_debug_counter = 0
         else:
             self.overlay_contour_points = []
+            self.overlay_contour_brightness = []
             self.overlay_scan_point = None
             self.overlay_rings = []
             self.overlay_cv_values = None
@@ -1152,9 +1155,7 @@ class QtMultiverseRenderer(QOpenGLWidget):
 
         # NDC test removed - was interfering with normal projection matrix
 
-        # Draw contour lines (match CPU version: white base + black top)
-        # CPU version: white 6px + black 2px (contour_scanner.py:438-445)
-        # GPU workaround: Draw multiple offset lines to simulate thickness (macOS limitation: glLineWidth = 1.0)
+        # Draw contour lines - light gray 1px solid
         if len(self.overlay_contour_points) > 1:
             # Flip Y: screen coords (Y down) -> OpenGL coords (Y up)
             vertices = np.array([
@@ -1164,28 +1165,10 @@ class QtMultiverseRenderer(QOpenGLWidget):
             color_loc = glGetUniformLocation(self.overlay_shader_program, b"color")
             glBindBuffer(GL_ARRAY_BUFFER, self.overlay_vbo)
 
-            # Layer 1: White base (4x thickness - simulate 24px)
-            glUniform4f(color_loc, 1.0, 1.0, 1.0, 1.0)  # White
-            offsets = [
-                (0, 0),   # Center
-                (-1, 0), (1, 0), (0, -1), (0, 1),  # Cross
-                (-2, 0), (2, 0), (0, -2), (0, 2),  # Outer cross
-                (-3, 0), (3, 0), (0, -3), (0, 3),  # Outer cross 2
-                (-4, 0), (4, 0), (0, -4), (0, 4),  # Outer cross 3
-                (-1, -1), (1, -1), (-1, 1), (1, 1),  # Diagonals
-                (-2, -2), (2, -2), (-2, 2), (2, 2),  # Diagonals 2
-            ]
-            for dx, dy in offsets:
-                offset_vertices = vertices + np.array([dx, dy], dtype=np.float32)
-                glBufferSubData(GL_ARRAY_BUFFER, 0, offset_vertices.nbytes, offset_vertices)
-                glDrawArrays(GL_LINE_STRIP, 0, len(offset_vertices))
-
-            # Layer 2: Black top (4x thickness - simulate 8px)
-            glUniform4f(color_loc, 0.0, 0.0, 0.0, 1.0)  # Black
-            for dx, dy in [(0, 0), (-1, 0), (1, 0), (0, -1), (0, 1), (-2, 0), (2, 0), (0, -2), (0, 2), (-1, -1), (1, -1), (-1, 1), (1, 1)]:
-                offset_vertices = vertices + np.array([dx, dy], dtype=np.float32)
-                glBufferSubData(GL_ARRAY_BUFFER, 0, offset_vertices.nbytes, offset_vertices)
-                glDrawArrays(GL_LINE_STRIP, 0, len(offset_vertices))
+            # Light gray line 1px (RGB: 0.7, 0.7, 0.7) with full opacity
+            glUniform4f(color_loc, 0.7, 0.7, 0.7, 1.0)
+            glBufferSubData(GL_ARRAY_BUFFER, 0, vertices.nbytes, vertices)
+            glDrawArrays(GL_LINE_STRIP, 0, len(vertices))
 
         # Draw scan point cross (match CPU version: 3 layers)
         # CPU version: black 10px + white 6px + pink 3px (contour_scanner.py:447-481)
@@ -1245,41 +1228,91 @@ class QtMultiverseRenderer(QOpenGLWidget):
                 glBufferSubData(GL_ARRAY_BUFFER, 0, offset_vertices.nbytes, offset_vertices)
                 glDrawArrays(GL_LINES, 0, 4)
 
-        # Draw trigger rings (match CPU version: 3px line with alpha blending)
-        # CPU version: cv2.circle with thickness=3 + alpha blending (contour_scanner.py:516-517)
+        # Draw trigger rings (破碎波紋效果)
         for ring in self.overlay_rings:
             pos_x, pos_y = ring['pos']
             pos_y = self.render_height - pos_y  # Flip Y
             radius = ring['radius']
             color = ring['color']  # BGR tuple
             alpha = ring['alpha']
+            arc_segments = ring.get('arc_segments', [])
 
             # Convert BGR to RGB
             r, g, b = color[2] / 255.0, color[1] / 255.0, color[0] / 255.0
 
             color_loc = glGetUniformLocation(self.overlay_shader_program, b"color")
             glBindBuffer(GL_ARRAY_BUFFER, self.overlay_vbo)
+
+            # 物理模型: 振幅隨半徑衰減 amplitude ∝ 1/√r
+            # 能量分散在擴大的圓周上 導致破碎稀疏
+            progress = min(radius / 150.0, 1.0)
+            amplitude_decay = 1.0 / np.sqrt(max(radius, 1.0))  # 避免除以零
+
+            # 初始時幾乎完整 隨半徑增大才破碎
+            # progress = 0 時閾值很低 幾乎所有段落都顯示
+            # progress = 1 時閾值提高 只有高 visibility 的段落顯示
+            visibility_threshold = 0.05 + progress * 0.5  # 0.05 -> 0.55
+
+            # 使用 ring 的 alpha 值 隨 decay time 淡出
             glUniform4f(color_loc, r, g, b, alpha)
 
-            # Generate circle vertices and draw multiple times to simulate 3px thickness
-            num_segments = 32
-            ring_offsets = [
-                0.0,      # Center
-                -1.0, 1.0, # Inner/outer offset
-            ]
-            for r_offset in ring_offsets:
-                circle_vertices = []
-                adjusted_radius = radius + r_offset
-                for i in range(num_segments):
-                    theta = 2.0 * np.pi * i / num_segments
-                    cx = pos_x + adjusted_radius * np.cos(theta)
-                    cy = pos_y + adjusted_radius * np.sin(theta)
-                    circle_vertices.append([cx, cy])
-                circle_vertices = np.array(circle_vertices, dtype=np.float32)
+            # 繪製各個弧段 1px 寬度
+            ring_offsets = [0.0]  # 1px thickness
+            segment_angle = 360.0 / len(arc_segments) if arc_segments else 22.5
 
-                # Upload and draw
-                glBufferSubData(GL_ARRAY_BUFFER, 0, circle_vertices.nbytes, circle_vertices)
-                glDrawArrays(GL_LINE_LOOP, 0, num_segments)
+            for seg_idx, seg in enumerate(arc_segments):
+                base_angle = seg['base_angle']
+                visibility = seg.get('visibility', 1.0)
+
+                # 振幅衰減影響可見度 模擬能量分散
+                # 初始時放大 visibility 讓圓圈更完整
+                effective_visibility = visibility * (1.0 + amplitude_decay * 8.0)
+
+                # 只繪製可見度高於閾值的弧段
+                if effective_visibility < visibility_threshold:
+                    continue
+
+                # 弧段長度範圍: 1/10 圓到 1/3 圓
+                # 隨 progress 增加 弧段逐漸縮短 模擬能量消散
+                min_arc_degrees = 36.0   # 1/10 圓
+                max_arc_degrees = 120.0  # 1/3 圓
+
+                # 初始長度由 visibility 決定
+                base_arc_angle = min_arc_degrees + visibility * (max_arc_degrees - min_arc_degrees)
+
+                # 隨 progress 縮短 速度加倍 最終幾乎消失
+                # 使用平方加速縮短效果
+                shrink_factor = 1.0 - (progress ** 1.5) * 0.95  # 1.0 -> 0.05
+                arc_angle = base_arc_angle * shrink_factor
+
+                # 隨半徑增加角度擾動 模擬波的不穩定性
+                angle_noise = np.sin(progress * np.pi) * 8.0 * (visibility - 0.5)
+                start_deg = base_angle + angle_noise
+                end_deg = start_deg + arc_angle
+
+                for r_offset in ring_offsets:
+                    adjusted_radius = radius + r_offset
+
+                    # 生成弧段頂點
+                    arc_vertices = []
+                    points_in_arc = max(3, int(arc_angle / 3))  # 每3度一個點
+
+                    for i in range(points_in_arc + 1):
+                        angle_deg = start_deg + (end_deg - start_deg) * i / points_in_arc
+                        theta = np.deg2rad(angle_deg)
+
+                        # 加入細微的半徑擾動 模擬水波表面張力效果
+                        radius_noise = np.sin(angle_deg * 0.5 + progress * 10) * 1.5 * visibility
+                        final_radius = adjusted_radius + radius_noise
+
+                        cx = pos_x + final_radius * np.cos(theta)
+                        cy = pos_y + final_radius * np.sin(theta)
+                        arc_vertices.append([cx, cy])
+
+                    if len(arc_vertices) > 1:
+                        arc_vertices = np.array(arc_vertices, dtype=np.float32)
+                        glBufferSubData(GL_ARRAY_BUFFER, 0, arc_vertices.nbytes, arc_vertices)
+                        glDrawArrays(GL_LINE_STRIP, 0, len(arc_vertices))
 
         # Restore state
         glBindVertexArray(0)

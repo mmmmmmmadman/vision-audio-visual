@@ -74,6 +74,7 @@ class ContourScanner:
         self.current_scan_pos = None  # 當前掃描位置 (x, y)
         self.trigger_rings = []
         self.last_trigger_positions = {'env1': None, 'env2': None, 'env3': None}
+        self.contour_brightness = []  # 輪廓點的亮度值 0-1
 
         # 輪廓穩定性追蹤
         self.prev_anchor_x_pct = self.anchor_x_pct
@@ -233,9 +234,11 @@ class ContourScanner:
         range_radius = ((range_x ** 2 + range_y ** 2) ** 0.5)
         range_radius_sq = range_radius ** 2
         best_filtered_contour = []
+        best_brightness = []
 
         for contour in valid_contours:
             filtered_points = []
+            filtered_brightness = []
             for point in contour:
                 x, y = point[0]
                 dist_sq = (x - anchor_x) ** 2 + (y - anchor_y) ** 2
@@ -245,10 +248,20 @@ class ContourScanner:
                     y_scaled = int(y / detection_scale)
                     filtered_points.append((x_scaled, y_scaled))
 
+                    # 從原始灰階圖取樣該點的亮度
+                    # 確保座標在範圍內
+                    if 0 <= y_scaled < height and 0 <= x_scaled < width:
+                        brightness = float(gray[y_scaled, x_scaled]) / 255.0
+                        filtered_brightness.append(brightness)
+                    else:
+                        filtered_brightness.append(0.5)  # 預設中等亮度
+
             if len(filtered_points) > len(best_filtered_contour):
                 best_filtered_contour = filtered_points
+                best_brightness = filtered_brightness
 
         self.contour_points = best_filtered_contour
+        self.contour_brightness = best_brightness
 
         # 計算輪廓長度 (用於 ENV4 觸發)
         self.contour_length = float(len(self.contour_points))
@@ -376,7 +389,8 @@ class ContourScanner:
                     'radius': 15,
                     'alpha': 1.0,
                     'color': CV_COLORS_BGR['ENV1'],
-                    'decay_time': decay_time
+                    'decay_time': decay_time,
+                    'arc_segments': self._generate_arc_segments(16)
                 })
                 self.last_trigger_positions['env1'] = (scan_x, scan_y, CV_COLORS_BGR['ENV1'])
         self.prev_x_greater = x_dist_greater
@@ -396,7 +410,8 @@ class ContourScanner:
                     'radius': 15,
                     'alpha': 1.0,
                     'color': CV_COLORS_BGR['ENV2'],
-                    'decay_time': decay_time
+                    'decay_time': decay_time,
+                    'arc_segments': self._generate_arc_segments(16)
                 })
                 self.last_trigger_positions['env2'] = (scan_x, scan_y, CV_COLORS_BGR['ENV2'])
         self.prev_y_greater = y_dist_greater
@@ -422,7 +437,8 @@ class ContourScanner:
                 'radius': 15,
                 'alpha': 1.0,
                 'color': CV_COLORS_BGR['ENV3'],
-                'decay_time': decay_time
+                'decay_time': decay_time,
+                'arc_segments': self._generate_arc_segments(16)
             })
             self.last_trigger_positions['env3'] = (scan_x, scan_y, CV_COLORS_BGR['ENV3'])
 
@@ -440,7 +456,8 @@ class ContourScanner:
                 'radius': 15,
                 'alpha': 1.0,
                 'color': CV_COLORS_BGR['ENV4'],
-                'decay_time': decay_time
+                'decay_time': decay_time,
+                'arc_segments': self._generate_arc_segments(16)
             })
             self.last_trigger_positions['env4'] = (scan_x, scan_y, CV_COLORS_BGR['ENV4'])
 
@@ -544,6 +561,52 @@ class ContourScanner:
         if self.cumulative_time:
             self.cumulative_time[-1] = 1.0
 
+    def _generate_arc_segments(self, num_segments: int = 16):
+        """生成破碎波紋的弧段配置 基於真實水波物理
+
+        Args:
+            num_segments: 弧段數量
+
+        Returns:
+            弧段配置列表 每個弧段包含角度調變參數
+        """
+        segments = []
+        segment_angle = 360.0 / num_segments
+
+        # 生成隨機相位用於正弦波調變 模擬表面張力干涉
+        phase_offsets = [np.random.random() * 2 * np.pi for _ in range(3)]
+
+        # 每個角度的調變由多個正弦波疊加
+        # 模擬重力波和毛細波的組合效果
+        for i in range(num_segments):
+            base_angle = i * segment_angle
+            angle_rad = np.deg2rad(base_angle)
+
+            # 多頻率正弦波疊加 產生自然的破碎模式
+            # 使用較少波峰 讓段落更長更連續
+            # 低頻: 2-3 個大段落
+            # 中頻: 輕微調變
+            modulation = (
+                0.7 * np.sin(2.3 * angle_rad + phase_offsets[0]) +
+                0.2 * np.sin(4.7 * angle_rad + phase_offsets[1]) +
+                0.1 * np.sin(9.1 * angle_rad + phase_offsets[2])
+            )
+
+            # 歸一化到 0-1 範圍
+            visibility = (modulation + 1.0) / 2.0  # -1~1 -> 0~1
+
+            # 輕微的非線性變換 保持較高的整體可見度
+            # 使用 1.2 次方 稍微拉開差距但不要太極端
+            visibility = visibility ** 1.2
+
+            segments.append({
+                'base_angle': base_angle,
+                'visibility': visibility,  # 0=完全消失 1=完全可見
+                'phase_offsets': phase_offsets  # 保留相位供繪製時使用
+            })
+
+        return segments
+
     def update_trigger_rings(self, dt: float = 1.0/60.0):
         """更新觸發光圈動畫
 
@@ -585,50 +648,11 @@ class ContourScanner:
         scale_x = frame_width / self.detection_width if self.detection_width > 0 else 1.0
         scale_y = frame_height / self.detection_height if self.detection_height > 0 else 1.0
 
-        # 繪製輪廓線 黑線與白線並存
-        if len(self.contour_points) > 1:
-            scaled_points = [(int(x * scale_x), int(y * scale_y)) for x, y in self.contour_points]
-            points = np.array(scaled_points, dtype=np.int32)
-            # 先畫白色粗線（底）- 6 像素
-            cv2.polylines(output, [points], False, (255, 255, 255), 6)
-            # 再畫黑色細線（上）- 2 像素
-            cv2.polylines(output, [points], False, (0, 0, 0), 2)
+        # 輪廓線繪製已移至 GPU overlay (qt_opengl_renderer.py)
+        # CPU 版本已停用以避免重複繪製
 
-        # 繪製當前掃描點：黑邊→白邊→粉紅填充的三層十字
-        if self.current_scan_pos is not None:
-            scan_x_scaled = int(self.current_scan_pos[0] * scale_x)
-            scan_y_scaled = int(self.current_scan_pos[1] * scale_y)
-            cross_size = 20
-
-            # 第一層：黑色外框（最粗）
-            cv2.line(output,
-                    (scan_x_scaled - cross_size, scan_y_scaled),
-                    (scan_x_scaled + cross_size, scan_y_scaled),
-                    (0, 0, 0), 10)
-            cv2.line(output,
-                    (scan_x_scaled, scan_y_scaled - cross_size),
-                    (scan_x_scaled, scan_y_scaled + cross_size),
-                    (0, 0, 0), 10)
-
-            # 第二層：白色邊框（中等）
-            cv2.line(output,
-                    (scan_x_scaled - cross_size, scan_y_scaled),
-                    (scan_x_scaled + cross_size, scan_y_scaled),
-                    (255, 255, 255), 6)
-            cv2.line(output,
-                    (scan_x_scaled, scan_y_scaled - cross_size),
-                    (scan_x_scaled, scan_y_scaled + cross_size),
-                    (255, 255, 255), 6)
-
-            # 第三層：粉紅色填充（最細，內部）
-            cv2.line(output,
-                    (scan_x_scaled - cross_size, scan_y_scaled),
-                    (scan_x_scaled + cross_size, scan_y_scaled),
-                    (133, 133, 255), 3)
-            cv2.line(output,
-                    (scan_x_scaled, scan_y_scaled - cross_size),
-                    (scan_x_scaled, scan_y_scaled + cross_size),
-                    (133, 133, 255), 3)
+        # 掃描點十字繪製已移至 GPU overlay (qt_opengl_renderer.py)
+        # CPU 版本已停用以避免重複繪製
 
         # PERFORMANCE: ROI 圓圈和 CV meter 已停用以提升效能
         # 保留錨點計算供內部使用
@@ -638,19 +662,8 @@ class ContourScanner:
         range_radius_y = int(self.range_pct * frame_height / 100.0 / 2.0)
         range_radius = int((range_radius_x + range_radius_y) / 2)
 
-        # 繪製觸發光圈
-        for ring in self.trigger_rings:
-            pos_x, pos_y = ring['pos']
-            pos_x_scaled = int(pos_x * scale_x)
-            pos_y_scaled = int(pos_y * scale_y)
-            radius_scaled = int(ring['radius'] * scale_x)
-            color = ring['color']
-            alpha = ring['alpha']
-
-            # 建立半透明圖層
-            overlay = output.copy()
-            cv2.circle(overlay, (pos_x_scaled, pos_y_scaled), radius_scaled, color, 3)
-            cv2.addWeighted(overlay, alpha, output, 1 - alpha, 0, output)
+        # 觸發光圈繪製已移至 GPU overlay (qt_opengl_renderer.py)
+        # CPU 版本已停用以避免重複繪製
 
         # 掃描進度條已停用
         # self._draw_scan_progress(output)

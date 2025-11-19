@@ -2,6 +2,40 @@
 
 ---
 
+## [2025-11-19] MIDI Note 按鈕與波紋視覺優化
+
+### MIDI Learn 系統修復
+- **修復 MIDI Note 按鈕 toggle 問題**:
+  - 問題: LED toggle 按鈕發送 Note On 訊號 (velocity 0/127 交替) 但每次按下會觸發兩次導致狀態錯亂
+  - 診斷工具: 建立 `midi_monitor.py` 獨立監控程式分析 MIDI 訊號
+  - 修復: `_handle_note()` 改用 velocity 作為狀態 (velocity > 0 = ON, velocity = 0 = OFF)
+  - 只在狀態真正改變時才觸發 callback 避免重複觸發
+
+- **修改檔案**:
+  - `vav/midi/midi_learn.py`:
+    - `_handle_note()` 新增 velocity 參數
+    - 改用狀態檢測取代 toggle 邏輯
+    - `_midi_loop()` 處理所有 note_on 訊息 (包含 velocity 0)
+  - 新增 `midi_monitor.py`: MIDI 訊號即時監控工具
+
+### 波紋視覺效果優化
+- **物理模擬波紋破碎效果**:
+  - 多頻率正弦波疊加產生自然破碎模式
+  - 振幅衰減 ∝ 1/√r (符合真實水波能量消散)
+  - 弧段隨半徑增加逐漸縮短並淡出
+  - 線寬改為 1px 透明度隨 decay time 淡出
+
+- **輪廓描邊簡化**:
+  - 改為淺灰色 (RGB 0.7) 1px 實線
+  - 移除亮度透明度調整功能
+  - 刪除 CPU 層 overlay 繪製避免重複
+
+- **修改檔案**:
+  - `vav/cv_generator/contour_scanner.py`: 波紋弧段生成邏輯
+  - `vav/visual/qt_opengl_renderer.py`: GPU 波紋與輪廓渲染
+
+---
+
 ## [2025-11-18] CV Meter Mute 功能與專案整理
 
 ### CV Meter Window 功能增強

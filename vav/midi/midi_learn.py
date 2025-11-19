@@ -57,6 +57,9 @@ class MIDILearnManager:
         # Last CC trigger time for buttons: {param_id: timestamp}
         self.last_button_cc_time: Dict[str, float] = {}
 
+        # Last CC value for buttons to detect changes: {param_id: int}
+        self.last_button_cc_value: Dict[str, int] = {}
+
         # Learn mode state
         self.learn_mode = False
         self.learn_parameter = None
@@ -137,16 +140,17 @@ class MIDILearnManager:
             if isinstance(value, bool):
                 callback(value)
             else:
-                # CC value: debounce to prevent rapid toggles from MIDI button
-                current_time = time.time()
-                if param_id in self.last_button_cc_time:
-                    if current_time - self.last_button_cc_time[param_id] < 0.2:
-                        return
-                self.last_button_cc_time[param_id] = current_time
+                # For LED toggle buttons: CC value represents LED state
+                # LED ON (button pressed) = 127 = REC ON
+                # LED OFF (button not lit) = 0 = REC OFF
+                # Directly map CC value to state
+                new_state = (value > 0)
+                old_state = self.button_states.get(param_id, False)
 
-                # Toggle on any CC message (regardless of value)
-                self.button_states[param_id] = not self.button_states.get(param_id, False)
-                callback(self.button_states[param_id])
+                # Only trigger callback if state actually changed
+                if new_state != old_state:
+                    self.button_states[param_id] = new_state
+                    callback(new_state)
 
         self.callbacks[param_id] = button_wrapper
         self.button_states[param_id] = False
@@ -232,9 +236,9 @@ class MIDILearnManager:
                 for msg in self.midi_in.iter_pending():
                     if msg.type == 'control_change':
                         self._handle_cc(msg.channel, msg.control, msg.value)
-                    # Only handle note_on with velocity > 0 (ignore note_off)
-                    elif msg.type == 'note_on' and msg.velocity > 0:
-                        self._handle_note(msg.channel, msg.note)
+                    # Handle all note_on messages (including velocity 0)
+                    elif msg.type == 'note_on':
+                        self._handle_note(msg.channel, msg.note, msg.velocity)
 
                 # Sleep to avoid busy-waiting and reduce CPU usage
                 time.sleep(0.01)  # 10ms sleep = max 100Hz MIDI polling
@@ -282,12 +286,13 @@ class MIDILearnManager:
                 except Exception as e:
                     print(f"⚠ Error calling callback for '{param_id}': {e}")
 
-    def _handle_note(self, channel: int, note: int):
+    def _handle_note(self, channel: int, note: int, velocity: int):
         """Handle MIDI Note On message for button toggle
 
         Args:
             channel: MIDI channel (0-15)
             note: Note number (0-127)
+            velocity: Note velocity (0-127)
         """
         # Learn mode: assign this note to the parameter
         if self.learn_mode and self.learn_parameter:
@@ -304,19 +309,22 @@ class MIDILearnManager:
             self.exit_learn_mode()
             return
 
-        # Normal mode: toggle button state
+        # Normal mode: use velocity as state (like LED toggle buttons)
         key = (channel, note)
         if key in self.note_mappings:
             param_id = self.note_mappings[key]
             if param_id in self.callbacks:
-                # Toggle button state (no debounce - MIDI controller handles toggle)
-                self.button_states[param_id] = not self.button_states.get(param_id, False)
+                # velocity > 0 = ON, velocity = 0 = OFF
+                new_state = (velocity > 0)
+                old_state = self.button_states.get(param_id, False)
 
-                # Call button callback with toggle state
-                try:
-                    self.callbacks[param_id](self.button_states[param_id])
-                except Exception as e:
-                    print(f"⚠ Error calling button callback for '{param_id}': {e}")
+                # Only trigger callback if state actually changed
+                if new_state != old_state:
+                    self.button_states[param_id] = new_state
+                    try:
+                        self.callbacks[param_id](new_state)
+                    except Exception as e:
+                        print(f"⚠ Error calling button callback for '{param_id}': {e}")
 
     def shutdown(self):
         """Shutdown MIDI system"""
