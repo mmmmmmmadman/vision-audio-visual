@@ -97,6 +97,17 @@ class VAVController:
         self.audio_frequencies = np.array([440.0, 440.0, 440.0, 440.0], dtype=np.float32)
         # No pitch shifting (fixed ratio=1.0, original Multiverse default)
 
+        # Alien4 glitch parameters (stored for visual rendering)
+        self.alien4_params = {
+            'mix': 0.0,        # Glitch global enable (0.0-1.0)
+            'feedback': 0.0,   # Region tear strength (0.0-0.8)
+            'speed': 0.0,      # Region swap frequency (0.0-1.0)
+            'poly': 1,         # RGB split strength (1-8 voices)
+            'delay_mix': 0.5,  # Ellen Ripley delay wet/dry
+            'grain_mix': 0.5,  # Ellen Ripley grain wet/dry
+            'reverb_mix': 0.0  # Ellen Ripley reverb wet/dry
+        }
+
         # CV generators (4 decay envelopes: ENV1-4)
         self.envelopes: List[DecayEnvelope] = []
         self.cv_values = np.zeros(6, dtype=np.float32)  # 6 CV outputs: ENV1-4, SEQ1-2
@@ -633,6 +644,13 @@ class VAVController:
         # Prepare overlay data for GPU rendering (if using Qt OpenGL)
         overlay_data = None
         if self.using_gpu:
+            # DEBUG: Check alien4_params before copying
+            if not hasattr(self, '_overlay_debug_counter'):
+                self._overlay_debug_counter = 0
+            self._overlay_debug_counter += 1
+            if self._overlay_debug_counter % 50 == 1:
+                print(f"[Controller] Creating overlay_data, alien4_params={self.alien4_params}")
+
             # Extract overlay data from contour_cv_generator
             overlay_data = {
                 'contour_points': self.contour_cv_generator.contour_points,
@@ -642,7 +660,8 @@ class VAVController:
                 'roi_center': (self.contour_cv_generator.anchor_x_pct / 100.0,
                               self.contour_cv_generator.anchor_y_pct / 100.0),
                 'roi_radius': self.contour_cv_generator.range_pct / 100.0 / 2.0,
-                'cv_values': self.cv_values if self.cv_overlay_enabled else None  # CV overlay可選
+                'cv_values': self.cv_values if self.cv_overlay_enabled else None,  # CV overlay可選
+                'alien4_params': self.alien4_params.copy()  # Alien4 glitch parameters (copy to avoid race)
             }
 
         # Render using Multiverse engine with GPU blend (33-42ms CPU blend eliminated!)
@@ -664,6 +683,10 @@ class VAVController:
         compress = 3.0
 
         if use_gpu_region:
+            # DEBUG: Check overlay_data before passing to renderer
+            if hasattr(self, '_overlay_debug_counter') and self._overlay_debug_counter % 50 == 1:
+                print(f"[Controller] Passing overlay_data to renderer, alien4_params={overlay_data.get('alien4_params', 'MISSING')}")
+
             # GPU region: pass camera frame for GPU calculation
             rendered_rgb = self.renderer.render(
                 channels_data,
@@ -1109,6 +1132,9 @@ class VAVController:
                                      feedback: float = None, chaos_enabled: bool = None,
                                      wet_dry: float = None):
         """Set Ellen Ripley delay parameters"""
+        if wet_dry is not None:
+            self.alien4_params['delay_mix'] = wet_dry
+            print(f"[Controller] delay_mix updated: {wet_dry:.3f}")
         if self.audio_process:
             self.audio_process.set_ellen_ripley_delay_params(
                 time_l, time_r, feedback, chaos_enabled, wet_dry)
@@ -1117,6 +1143,9 @@ class VAVController:
                                      position: float = None, chaos_enabled: bool = None,
                                      wet_dry: float = None):
         """Set Ellen Ripley grain parameters"""
+        if wet_dry is not None:
+            self.alien4_params['grain_mix'] = wet_dry
+            print(f"[Controller] grain_mix updated: {wet_dry:.3f}")
         if self.audio_process:
             self.audio_process.set_ellen_ripley_grain_params(
                 size, density, position, chaos_enabled, wet_dry)
@@ -1125,6 +1154,9 @@ class VAVController:
                                       decay: float = None, chaos_enabled: bool = None,
                                       wet_dry: float = None):
         """Set Ellen Ripley reverb parameters"""
+        if wet_dry is not None:
+            self.alien4_params['reverb_mix'] = wet_dry
+            print(f"[Controller] reverb_mix updated: {wet_dry:.3f}")
         if self.audio_process:
             self.audio_process.set_ellen_ripley_reverb_params(
                 room_size, damping, decay, chaos_enabled, wet_dry)
@@ -1141,6 +1173,21 @@ class VAVController:
                                    eq_mid: float = None, eq_high: float = None,
                                    poly: int = None):
         """Set Alien4 Documenta (Loop+EQ) parameters"""
+        # Store glitch-relevant parameters for visual rendering
+        if mix is not None:
+            self.alien4_params['mix'] = mix
+            print(f"[Controller] alien4 mix updated: {mix:.2f}")
+        if feedback is not None:
+            self.alien4_params['feedback'] = feedback
+            print(f"[Controller] alien4 feedback updated: {feedback:.2f}")
+        if speed is not None:
+            self.alien4_params['speed'] = speed
+            print(f"[Controller] alien4 speed updated: {speed:.2f}")
+        if poly is not None:
+            self.alien4_params['poly'] = poly
+            print(f"[Controller] alien4 poly updated: {poly}")
+
+        # Send to audio process
         if self.audio_process:
             self.audio_process.set_alien4_documenta_params(
                 mix=mix, feedback=feedback, speed=speed,
