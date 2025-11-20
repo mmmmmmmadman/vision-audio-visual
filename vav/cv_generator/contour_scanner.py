@@ -115,6 +115,11 @@ class ContourScanner:
         self.pattern_resolution = 100  # Pattern 解析度
         self._generate_lfo_patterns()
 
+    def reset_resolution_dependent_state(self):
+        """重置所有與解析度相關的狀態"""
+        self.prev_gray = None
+        self.previous_edges = None
+        print("[ContourScanner] Resolution changed, reset prev_gray and previous_edges")
 
     def detect_and_extract_contour(self, gray: np.ndarray):
         """偵測邊緣並提取最主要的輪廓線
@@ -143,10 +148,16 @@ class ContourScanner:
 
         scene_changed = False
         if self.prev_gray is not None:
-            diff = cv2.absdiff(gray_small, self.prev_gray)
-            mean_diff = np.mean(diff)
-            diff_percentage = (mean_diff / 255.0) * 100.0
-            scene_changed = diff_percentage > self.scene_change_threshold
+            # Check if resolution changed (e.g., camera switched)
+            if self.prev_gray.shape != gray_small.shape:
+                # Resolution changed, reset all resolution-dependent state
+                self.reset_resolution_dependent_state()
+                scene_changed = True
+            else:
+                diff = cv2.absdiff(gray_small, self.prev_gray)
+                mean_diff = np.mean(diff)
+                diff_percentage = (mean_diff / 255.0) * 100.0
+                scene_changed = diff_percentage > self.scene_change_threshold
 
         # 正常執行邊緣檢測（anchor/range改變也會觸發）
         params_changed = anchor_moved or range_changed
@@ -200,12 +211,17 @@ class ContourScanner:
 
         # 時間平滑
         if self.previous_edges is not None and self.temporal_alpha < 100:
-            if anchor_moved or range_changed:
-                alpha = min(0.9, self.temporal_alpha / 100.0 + 0.3)
-            else:
-                alpha = self.temporal_alpha / 100.0
-            edges = cv2.addWeighted(edges, alpha, self.previous_edges, 1 - alpha, 0)
-            edges = edges.astype(np.uint8)
+            # Check if resolution changed
+            if self.previous_edges.shape != edges.shape:
+                # Resolution changed, reset all resolution-dependent state
+                self.reset_resolution_dependent_state()
+            elif self.previous_edges is not None:
+                if anchor_moved or range_changed:
+                    alpha = min(0.9, self.temporal_alpha / 100.0 + 0.3)
+                else:
+                    alpha = self.temporal_alpha / 100.0
+                edges = cv2.addWeighted(edges, alpha, self.previous_edges, 1 - alpha, 0)
+                edges = edges.astype(np.uint8)
 
         self.previous_edges = edges.copy()
 

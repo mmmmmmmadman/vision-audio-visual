@@ -8,7 +8,7 @@ import threading
 import time
 import cv2
 
-from ..vision.camera import AsyncCamera
+from ..vision.camera import AsyncCamera, VideoFileSource
 from ..cv_generator.contour_scanner import ContourScanner
 from ..cv_generator.envelope import DecayEnvelope
 from ..audio.io import AudioIO
@@ -299,18 +299,33 @@ class VAVController:
         self.config["audio"]["output_device"] = self.audio_io.output_device
 
         # 創建並啟動 AudioProcess（使用更新後的 config）
-        print("  Creating audio process...")
-        self.audio_process = AudioProcess(self.config)
-        self.audio_process.start()
+        # Only create if not exists
+        if self.audio_process is None:
+            print("  Creating audio process...")
+            self.audio_process = AudioProcess(self.config)
+            self.audio_process.start()
+        else:
+            print("  Audio process already exists, reusing...")
 
         # Start vision thread
-        self.vision_thread = threading.Thread(target=self._vision_loop, daemon=True)
-        self.vision_thread.start()
+        # Only create if not exists or if old thread has finished
+        if self.vision_thread is None or not self.vision_thread.is_alive():
+            print("  Creating vision thread...")
+            self.vision_thread = threading.Thread(target=self._vision_loop, daemon=True)
+            self.vision_thread.start()
+        else:
+            print("  Vision thread already running...")
 
         print("VAV system started")
 
-    def stop(self):
-        """Stop all subsystems"""
+    def stop(self, stop_audio: bool = True, wait_for_thread: bool = False):
+        """
+        Stop all subsystems
+
+        Args:
+            stop_audio: If True, stop audio process (default). If False, keep audio running for quick restart.
+            wait_for_thread: If True, wait for vision thread to finish. If False (default), just signal stop and return immediately.
+        """
         if not self.running:
             return
 
@@ -321,19 +336,176 @@ class VAVController:
         if self.virtual_camera_enabled:
             self.disable_virtual_camera()
 
-        # Stop audio process
-        if self.audio_process:
+        # Stop audio process (optional)
+        if stop_audio and self.audio_process:
+            print("  Stopping audio process...")
             self.audio_process.stop()
+            self.audio_process = None
 
-        # Wait for vision thread
-        if self.vision_thread:
+        # Wait for vision thread (only if explicitly requested and not called from GUI thread)
+        if wait_for_thread and self.vision_thread:
+            print("  Waiting for vision thread to stop...")
             self.vision_thread.join(timeout=2.0)
+            if self.vision_thread.is_alive():
+                print("  WARNING: Vision thread did not stop in time, will be orphaned")
+            else:
+                print("  Vision thread stopped successfully")
+            self.vision_thread = None
+        else:
+            print("  Vision thread will stop asynchronously...")
 
         # Close camera
         if self.camera:
+            print("  Closing camera...")
             self.camera.close()
 
         print("VAV system stopped")
+
+    def _do_camera_switch(self, new_camera, was_running: bool) -> bool:
+        """
+        Internal helper to complete camera switch after vision thread stops
+
+        Args:
+            new_camera: New camera object to use
+            was_running: Whether system was running before switch
+
+        Returns:
+            bool: Success status
+        """
+        try:
+            # Close old camera (vision thread will handle errors gracefully)
+            old_camera = self.camera
+
+            # Immediately switch to new camera to minimize error window
+            self.camera = new_camera
+
+            # Now close old camera
+            if old_camera:
+                print("[Controller] Closing old camera...")
+                old_camera.close()
+
+            # Reinitialize region mapper with new dimensions
+            if self.region_mapper:
+                print("[Controller] Reinitializing region mapper...")
+                self.region_mapper = ContentAwareRegionMapper(
+                    width=self.camera.width,
+                    height=self.camera.height
+                )
+                print(f"Region mapper reinitialized for {self.camera.width}x{self.camera.height}")
+
+            # Restart if was running
+            if was_running:
+                print("[Controller] Restarting system...")
+                self.start()
+
+            return True
+        except Exception as e:
+            import traceback
+            print(f"[Controller] ERROR in _do_camera_switch: {e}")
+            traceback.print_exc()
+            return False
+
+    def switch_to_video_file(self, video_path: str, loop: bool = True) -> bool:
+        """
+        Switch from camera to video file input
+
+        Args:
+            video_path: Path to video file
+            loop: Whether to loop playback
+
+        Returns:
+            bool: Success status
+        """
+        try:
+            print(f"[Controller] switch_to_video_file called with: {video_path}")
+            was_running = self.running
+            print(f"[Controller] System was running: {was_running}")
+
+            # Stop if running (but keep audio running) - non-blocking
+            if was_running:
+                print("[Controller] Stopping system (keeping audio)...")
+                self.stop(stop_audio=False, wait_for_thread=False)
+
+            # Create video file source
+            print(f"[Controller] Creating VideoFileSource...")
+            new_camera = VideoFileSource(video_path=video_path, loop=loop)
+
+            print("[Controller] Opening video file...")
+            if not new_camera.open():
+                print(f"Failed to open video file: {video_path}")
+                # Fallback to camera
+                print("[Controller] Attempting to fallback to camera...")
+                camera_config = self.config.get("camera", {})
+                new_camera = AsyncCamera(
+                    device_id=camera_config.get("device_id", 0),
+                    width=camera_config.get("width", 1920),
+                    height=camera_config.get("height", 1080),
+                    fps=camera_config.get("fps", 30),
+                )
+                if not new_camera.open():
+                    print("Failed to fallback to camera")
+                    return False
+                print("Reverted to camera input")
+            else:
+                print(f"Switched to video file: {video_path}")
+
+            # Complete the switch (will wait for vision thread to finish if needed)
+            return self._do_camera_switch(new_camera, was_running)
+
+        except Exception as e:
+            import traceback
+            print(f"[Controller] ERROR in switch_to_video_file: {e}")
+            traceback.print_exc()
+            return False
+
+    def switch_to_camera(self) -> bool:
+        """
+        Switch from video file back to camera input
+
+        Returns:
+            bool: Success status
+        """
+        try:
+            print("[Controller] switch_to_camera called")
+            was_running = self.running
+            print(f"[Controller] System was running: {was_running}")
+
+            # Stop if running (but keep audio running) - non-blocking
+            if was_running:
+                print("[Controller] Stopping system (keeping audio)...")
+                self.stop(stop_audio=False, wait_for_thread=False)
+
+            # Create camera source
+            print("[Controller] Creating AsyncCamera...")
+            camera_config = self.config.get("camera", {})
+            new_camera = AsyncCamera(
+                device_id=camera_config.get("device_id", 0),
+                width=camera_config.get("width", 1920),
+                height=camera_config.get("height", 1080),
+                fps=camera_config.get("fps", 30),
+            )
+
+            print("[Controller] Opening camera...")
+            if not new_camera.open():
+                print("ERROR: Failed to open camera")
+                # Try to give more info
+                import platform
+                if platform.system() == 'Darwin':
+                    print("  Hint: Make sure camera permissions are granted in System Preferences")
+                return False
+
+            print(f"SUCCESS: Switched to camera (device {new_camera.device_id})")
+            print(f"  Camera resolution: {new_camera.width}x{new_camera.height} @ {new_camera.fps}fps")
+            print(f"  Camera is_opened: {new_camera.is_opened}")
+
+            # Complete the switch
+            return self._do_camera_switch(new_camera, was_running)
+
+        except Exception as e:
+            import traceback
+            print(f"[Controller] ERROR in switch_to_camera: {e}")
+            traceback.print_exc()
+            return False
 
     def _vision_loop(self):
         """Vision processing loop (runs in separate thread)"""
@@ -348,14 +520,13 @@ class VAVController:
 
         # Track consecutive failures for error detection
         consecutive_failures = 0
-        max_failures = 10
+        max_failures = 30  # Increased to handle camera switching
 
         while self.running:
             start_time = time.time()
 
             # Check if camera is still open
             if not self.camera.is_opened:
-                print("ERROR: Camera closed during vision loop!")
                 consecutive_failures += 1
                 if consecutive_failures >= max_failures:
                     print(f"ERROR: Camera failed {max_failures} times, stopping vision loop")
@@ -372,6 +543,8 @@ class VAVController:
                     print(f"ERROR: Failed to read {max_failures} frames, camera may be disconnected")
                     self.running = False
                     break
+                # Short sleep to avoid tight loop during camera switch
+                time.sleep(0.02)
                 continue
 
             # Reset failure counter on successful read

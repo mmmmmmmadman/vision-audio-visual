@@ -87,6 +87,106 @@ class AsyncCamera:
         self.close()
 
 
+class VideoFileSource:
+    """Video file playback handler compatible with AsyncCamera interface"""
+
+    def __init__(self, video_path: str, loop: bool = True):
+        self.video_path = video_path
+        self.loop = loop
+        self.cap: Optional[cv2.VideoCapture] = None
+        self.is_opened = False
+
+        # Compatibility with AsyncCamera interface
+        self.device_id = -1  # -1 indicates video file source
+
+        # Get video properties
+        self.width = 1920
+        self.height = 1080
+        self.fps = 30
+
+        # Async reading
+        self.frame = None
+        self.frame_lock = threading.Lock()
+        self.running = False
+        self.read_thread = None
+
+    def open(self) -> bool:
+        """Open video file and start background reading thread"""
+        self.cap = cv2.VideoCapture(self.video_path)
+        if not self.cap.isOpened():
+            print(f"Failed to open video file: {self.video_path}")
+            return False
+
+        # Get actual video properties
+        self.width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        self.height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        self.fps = int(self.cap.get(cv2.CAP_PROP_FPS))
+        if self.fps == 0:
+            self.fps = 30
+
+        print(f"Video opened: {self.width}x{self.height} @ {self.fps}fps")
+
+        self.is_opened = True
+
+        # Start background thread
+        self.running = True
+        self.read_thread = threading.Thread(target=self._read_loop, daemon=True)
+        self.read_thread.start()
+
+        return True
+
+    def _read_loop(self):
+        """Background thread continuously reads frames"""
+        while self.running:
+            if self.cap is not None and self.cap.isOpened():
+                ret, frame = self.cap.read()
+                if ret:
+                    with self.frame_lock:
+                        self.frame = frame
+                else:
+                    # End of video
+                    if self.loop:
+                        # Reset to beginning
+                        self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                        # Small delay to avoid tight loop
+                        import time
+                        time.sleep(0.01)
+                    else:
+                        # Stop playback
+                        self.running = False
+            else:
+                # Camera not ready, wait a bit
+                import time
+                time.sleep(0.05)
+
+    def read(self) -> Tuple[bool, Optional[np.ndarray]]:
+        """Read latest frame (non-blocking)"""
+        if not self.is_opened:
+            return False, None
+
+        with self.frame_lock:
+            if self.frame is not None:
+                return True, self.frame.copy()
+            return False, None
+
+    def close(self):
+        """Close video file and stop background thread"""
+        self.running = False
+        if self.read_thread is not None:
+            self.read_thread.join(timeout=1.0)
+
+        if self.cap is not None:
+            self.cap.release()
+            self.is_opened = False
+
+    def get_resolution(self) -> Tuple[int, int]:
+        """Get video resolution"""
+        return (self.width, self.height)
+
+    def __del__(self):
+        self.close()
+
+
 class Camera:
     """Webcam capture handler (legacy synchronous version)"""
 

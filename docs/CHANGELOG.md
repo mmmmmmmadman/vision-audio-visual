@@ -2,6 +2,67 @@
 
 ---
 
+## [2025-11-21] 影片檔案載入功能與解析度切換修復
+
+### 影片載入功能
+- **新增 Load Video 按鈕**:
+  - 支援載入影片檔案作為輸入來源 (mp4, avi, mov, mkv)
+  - 自動偵測影片解析度並調整系統設定
+  - 影片播放採用迴圈模式
+
+- **新增 Switch to Camera 按鈕**:
+  - 支援從影片切回相機輸入
+  - 保持音訊處理不中斷
+
+- **VideoFileSource 類別** (`vav/vision/camera.py`):
+  - 實作與 AsyncCamera 相容的介面
+  - 背景執行緒非阻塞式讀取影片幀
+  - 自動偵測影片參數 (寬高fps)
+  - `device_id = -1` 標示為影片來源
+
+### 解析度切換修復
+- **問題**: 切換不同解析度輸入源時程式崩潰
+  - 相機 1920x1080 切換到影片 3840x2160 時
+  - ContourScanner 內部緩存尺寸不符導致 OpenCV 錯誤
+
+- **修復方案**:
+  - `ContourScanner.reset_resolution_dependent_state()` 統一重置方法
+  - 偵測 `prev_gray` 和 `previous_edges` 尺寸變化時自動重置
+  - 確保所有解析度相關狀態同步更新
+
+- **Controller 修改** (`vav/core/controller.py`):
+  - `switch_to_video_file()`: 載入影片並切換輸入源
+  - `switch_to_camera()`: 切回相機輸入
+  - `_do_camera_switch()`: 原子性相機物件替換避免競態
+  - `stop()` 新增 `wait_for_thread` 參數避免 GUI 執行緒阻塞
+
+- **Vision Loop 容錯** (`vav/core/controller.py:_vision_loop`):
+  - `max_failures` 從 10 增加到 30 給予切換更多緩衝時間
+  - 讀取失敗時 `sleep(0.02)` 避免 CPU 空轉
+  - 優雅處理相機未就緒狀態
+
+### Anchor 座標修復
+- **修復影片輸入時 anchor 位置錯誤**:
+  - 問題: 使用影片時 anchor 顯示位置不正確
+  - 原因: OpenGL renderer 使用 render 尺寸而非實際幀尺寸計算 Y 翻轉
+  - 修復: 儲存並使用實際幀尺寸進行座標轉換
+
+### 修改檔案
+- `vav/vision/camera.py`: VideoFileSource 類別實作
+- `vav/core/controller.py`:
+  - 相機切換邏輯
+  - Vision loop 容錯增強
+  - 非阻塞 stop 機制
+- `vav/gui/compact_main_window.py`:
+  - Load Video / Switch to Camera 按鈕
+  - QTimer 延遲執行避免 GUI 阻塞
+- `vav/cv_generator/contour_scanner.py`:
+  - 解析度變化偵測與狀態重置
+- `vav/visual/qt_opengl_renderer.py`:
+  - Anchor 座標計算修正
+
+---
+
 ## [2025-11-19] MIDI Note 按鈕與波紋視覺優化
 
 ### MIDI Learn 系統修復

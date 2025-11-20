@@ -1087,6 +1087,25 @@ class QtMultiverseRenderer(QOpenGLWidget):
         """
         Render directly in GUI thread (internal use only)
         """
+        # Store actual frame height for overlay Y-flip
+        if camera_frame is not None:
+            self._actual_frame_height = camera_frame.shape[0]
+            self._actual_frame_width = camera_frame.shape[1]
+        elif blend_frame is not None:
+            self._actual_frame_height = blend_frame.shape[0]
+            self._actual_frame_width = blend_frame.shape[1]
+        else:
+            self._actual_frame_height = self.render_height
+            self._actual_frame_width = self.render_width
+
+        # Debug frame dimensions
+        if not hasattr(self, '_frame_dim_debug_counter'):
+            self._frame_dim_debug_counter = 0
+        self._frame_dim_debug_counter += 1
+        if self._frame_dim_debug_counter == 100:
+            print(f"[Renderer] Frame dimensions: actual={self._actual_frame_width}x{self._actual_frame_height}, render={self.render_width}x{self.render_height}")
+            self._frame_dim_debug_counter = 0
+
         # Prepare audio data
         self.audio_data.fill(0.0)
         self.enabled_mask.fill(0.0)
@@ -1477,9 +1496,17 @@ class QtMultiverseRenderer(QOpenGLWidget):
         # Use overlay shader
         glUseProgram(self.overlay_shader_program)
 
+        # Create projection matrix based on actual frame dimensions
+        actual_width = getattr(self, '_actual_frame_width', self.render_width)
+        actual_height = getattr(self, '_actual_frame_height', self.render_height)
+
+        overlay_projection = self._create_ortho_matrix(
+            0, actual_width, 0, actual_height, -1, 1
+        )
+
         # Set projection matrix uniform
         proj_loc = glGetUniformLocation(self.overlay_shader_program, b"projection")
-        glUniformMatrix4fv(proj_loc, 1, GL_FALSE, self.overlay_projection_matrix.flatten())
+        glUniformMatrix4fv(proj_loc, 1, GL_FALSE, overlay_projection.flatten())
 
         # Bind overlay VAO and explicitly reconfigure attributes
         glBindVertexArray(self.overlay_vao)
@@ -1489,11 +1516,14 @@ class QtMultiverseRenderer(QOpenGLWidget):
 
         # NDC test removed - was interfering with normal projection matrix
 
+        # Use actual frame height for Y flip (stored from last render call)
+        actual_height = getattr(self, '_actual_frame_height', self.render_height)
+
         # Draw contour lines - light gray 1px solid
         if len(self.overlay_contour_points) > 1:
             # Flip Y: screen coords (Y down) -> OpenGL coords (Y up)
             vertices = np.array([
-                [x, self.render_height - y] for x, y in self.overlay_contour_points
+                [x, actual_height - y] for x, y in self.overlay_contour_points
             ], dtype=np.float32)
 
             color_loc = glGetUniformLocation(self.overlay_shader_program, b"color")
@@ -1508,7 +1538,7 @@ class QtMultiverseRenderer(QOpenGLWidget):
         # CPU version: black 10px + white 6px + pink 3px (contour_scanner.py:447-481)
         if self.overlay_scan_point is not None:
             x, y = self.overlay_scan_point
-            y = self.render_height - y  # Flip Y
+            y = actual_height - y  # Flip Y using actual frame height
             cross_size = 20.0
 
             # Create cross vertices (horizontal + vertical lines)

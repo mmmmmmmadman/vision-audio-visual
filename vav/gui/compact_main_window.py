@@ -193,11 +193,21 @@ class CompactMainWindow(QMainWindow):
         self.vcam_btn.setCheckable(True)
         self.vcam_btn.clicked.connect(self._on_toggle_virtual_camera)
 
+        self.load_video_btn = QPushButton("Load Video")
+        self.load_video_btn.setFixedHeight(30)
+        self.load_video_btn.clicked.connect(self._on_load_video)
+
+        self.switch_camera_btn = QPushButton("Switch to Camera")
+        self.switch_camera_btn.setFixedHeight(30)
+        self.switch_camera_btn.clicked.connect(self._on_switch_camera)
+
         control_layout.addWidget(self.start_btn)
         control_layout.addWidget(self.stop_btn)
         control_layout.addWidget(self.show_video_btn)
         control_layout.addWidget(self.devices_btn)
         control_layout.addWidget(self.vcam_btn)
+        control_layout.addWidget(self.load_video_btn)
+        control_layout.addWidget(self.switch_camera_btn)
         control_layout.addStretch()
         main_layout.addLayout(control_layout)
 
@@ -1389,11 +1399,16 @@ class CompactMainWindow(QMainWindow):
         import sounddevice as sd
 
         # Get current device configuration
+        # Use device_id if available (camera), otherwise use 0 (video file or no camera)
+        camera_device_id = getattr(self.controller.camera, 'device_id', 0) if self.controller.camera else 0
+        if camera_device_id == -1:
+            camera_device_id = 0  # VideoFileSource uses -1, default to 0 for dialog
+
         current_devices = {
             'audio_input': self.controller.audio_io.input_device,
             'audio_output': self.controller.audio_io.output_device,
             'buffer_size': self.controller.audio_io.buffer_size,
-            'camera_input': self.controller.camera.device_id,
+            'camera_input': camera_device_id,
             'camera_output': None,
         }
         print(f"[MainWindow] Current devices: {current_devices}")
@@ -1514,6 +1529,67 @@ class CompactMainWindow(QMainWindow):
         else:
             self.controller.disable_virtual_camera()
             self.status_label.setText("Virtual camera disabled")
+
+    def _on_load_video(self):
+        """Load video file as input source"""
+        try:
+            from PyQt6.QtWidgets import QFileDialog
+            from PyQt6.QtCore import QTimer
+
+            video_path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Select Video File",
+                "",
+                "Video Files (*.mp4 *.avi *.mov *.mkv);;All Files (*)"
+            )
+
+            if video_path:
+                print(f"Loading video: {video_path}")
+                self.status_label.setText("Switching to video...")
+
+                # Use QTimer to defer the switch operation to avoid blocking GUI thread
+                def do_switch():
+                    success = self.controller.switch_to_video_file(video_path, loop=True)
+                    if success:
+                        self.status_label.setText(f"Loaded video: {video_path.split('/')[-1]}")
+                        print("Video loaded successfully")
+                    else:
+                        self.status_label.setText("Failed to load video")
+                        print("Failed to load video")
+
+                QTimer.singleShot(100, do_switch)
+
+        except Exception as e:
+            import traceback
+            print(f"Error in _on_load_video: {e}")
+            traceback.print_exc()
+            self.status_label.setText(f"Error: {str(e)}")
+
+    def _on_switch_camera(self):
+        """Switch back to camera input"""
+        try:
+            from PyQt6.QtCore import QTimer
+
+            print("Switching to camera...")
+            self.status_label.setText("Switching to camera...")
+
+            # Use QTimer to defer the switch operation to avoid blocking GUI thread
+            def do_switch():
+                success = self.controller.switch_to_camera()
+                if success:
+                    self.status_label.setText("Switched to camera")
+                    print("Camera switched successfully")
+                else:
+                    self.status_label.setText("Failed to switch to camera")
+                    print("Failed to switch to camera")
+
+            QTimer.singleShot(100, do_switch)
+
+        except Exception as e:
+            import traceback
+            print(f"Error in _on_switch_camera: {e}")
+            traceback.print_exc()
+            self.status_label.setText(f"Error: {str(e)}")
 
     def _on_multiverse_toggle(self, state: int):
         enabled = (state == Qt.CheckState.Checked.value)
