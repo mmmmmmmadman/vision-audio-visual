@@ -26,6 +26,8 @@ class CompactMainWindow(QMainWindow):
     cv_updated = pyqtSignal(np.ndarray)
     visual_updated = pyqtSignal(dict)
     param_updated = pyqtSignal(str, int, float)  # param_name, channel, value
+    midi_slider_updated = pyqtSignal(str, int)  # param_id, value - for thread-safe MIDI updates
+    midi_button_updated = pyqtSignal(str, bool)  # param_id, state - for thread-safe MIDI button updates
 
     def __init__(self, controller: VAVController):
         super().__init__()
@@ -44,19 +46,31 @@ class CompactMainWindow(QMainWindow):
         self.cv_updated.connect(self._update_cv_display)
         self.visual_updated.connect(self._update_visual_display)
         self.param_updated.connect(self._update_param_display)
+        self.midi_slider_updated.connect(self._on_midi_slider_update)
+        self.midi_button_updated.connect(self._on_midi_button_update)
 
         # MIDI Learn system (initialize before building UI)
         from ..midi import MIDILearnManager
         self.midi_learn = MIDILearnManager()
 
+        # Store MIDI slider and button callbacks for thread-safe updates
+        self._midi_slider_callbacks = {}
+        self._midi_button_callbacks = {}
+
         # Build UI
         self._build_ui()
 
         # Register Rec button with MIDI Learn (after UI is built)
-        def on_alien4_rec_midi_toggle(state: bool):
+        def on_alien4_rec_actual(state: bool):
             self.alien4_rec_button.setChecked(state)
             self.controller.set_alien4_recording(state)
             self.status_label.setText(f"Alien4 REC: {'ON' if state else 'OFF'}")
+
+        self._midi_button_callbacks["alien4_rec"] = on_alien4_rec_actual
+
+        def on_alien4_rec_midi_toggle(state: bool):
+            # Emit signal to update GUI in main thread (thread-safe)
+            self.midi_button_updated.emit("alien4_rec", state)
 
         self.midi_learn.register_button("alien4_rec", on_alien4_rec_midi_toggle)
 
@@ -126,19 +140,33 @@ class CompactMainWindow(QMainWindow):
         min_val = slider.minimum()
         max_val = slider.maximum()
 
+        # Store slider and callback for thread-safe MIDI updates
+        self._midi_slider_callbacks[param_id] = (slider, callback)
+
         def midi_callback(value):
             # Value already scaled by midi_learn.py to slider range
             slider_value = int(value)
-
-            # Block signals to prevent recursion, then update slider
-            slider.blockSignals(True)
-            slider.setValue(slider_value)
-            slider.blockSignals(False)
-
-            # Call the original callback directly with the slider value
-            callback(slider_value)
+            # Emit signal to update GUI in main thread (thread-safe)
+            self.midi_slider_updated.emit(param_id, slider_value)
 
         self.midi_learn.register_parameter(param_id, midi_callback, min_val, max_val)
+
+    def _on_midi_slider_update(self, param_id: str, value: int):
+        """Handle MIDI slider update in main thread (thread-safe)"""
+        if param_id in self._midi_slider_callbacks:
+            slider, callback = self._midi_slider_callbacks[param_id]
+            # Block signals to prevent recursion, then update slider
+            slider.blockSignals(True)
+            slider.setValue(value)
+            slider.blockSignals(False)
+            # Call the original callback
+            callback(value)
+
+    def _on_midi_button_update(self, param_id: str, state: bool):
+        """Handle MIDI button update in main thread (thread-safe)"""
+        if param_id in self._midi_button_callbacks:
+            callback = self._midi_button_callbacks[param_id]
+            callback(state)
 
     def _show_button_midi_menu(self, pos, button, param_id: str):
         """Show MIDI context menu for button"""

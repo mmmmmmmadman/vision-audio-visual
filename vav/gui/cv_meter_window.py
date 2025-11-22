@@ -4,13 +4,16 @@
 
 import numpy as np
 from PyQt6.QtWidgets import QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, QMenu, QSlider, QLabel
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from .meter_widget import MeterWidget
 from .visual_preview_widget import VisualPreviewWidget
 
 
 class CVMeterWindow(QMainWindow):
     """獨立可調整大小的 CV Meters 視窗"""
+
+    # Signal for thread-safe MIDI anchor updates
+    midi_anchor_updated = pyqtSignal(str, float)  # axis ('x' or 'y'), value
 
     def __init__(self):
         super().__init__()
@@ -69,6 +72,9 @@ class CVMeterWindow(QMainWindow):
         # Controller reference (will be set by main window)
         self.controller = None
 
+        # Connect MIDI anchor signal for thread-safe updates
+        self.midi_anchor_updated.connect(self._on_midi_anchor_update)
+
     def set_controller(self, controller):
         """設定 controller 並連接 anchor position signal"""
         self.controller = controller
@@ -93,19 +99,32 @@ class CVMeterWindow(QMainWindow):
         """設定 MIDI Learn 並註冊 Anchor XY 參數"""
         self.midi_learn = midi_learn
 
-        # Register Anchor X/Y for MIDI Learn
+        # Register Anchor X/Y for MIDI Learn (thread-safe via signal)
         def anchor_x_midi_callback(value):
-            self.visual_preview.set_position(value, self.visual_preview.y_pct, emit_signal=True)
+            # Emit signal to update GUI in main thread (thread-safe)
+            self.midi_anchor_updated.emit('x', value)
 
         def anchor_y_midi_callback(value):
-            # Invert Y: MIDI 0-100 → GUI 100-0
-            inverted_y = 100.0 - value
-            self.visual_preview.set_position(self.visual_preview.x_pct, inverted_y, emit_signal=True)
+            # Emit signal to update GUI in main thread (thread-safe)
+            self.midi_anchor_updated.emit('y', value)
 
         self.midi_learn.register_parameter("anchor_x", anchor_x_midi_callback, 0.0, 100.0)
         self.midi_learn.register_parameter("anchor_y", anchor_y_midi_callback, 0.0, 100.0)
 
-        # Add context menu for Visual Preview
+        # Setup context menu for MIDI Learn
+        self._setup_midi_context_menu()
+
+    def _on_midi_anchor_update(self, axis: str, value: float):
+        """Handle MIDI anchor update in main thread (thread-safe)"""
+        if axis == 'x':
+            self.visual_preview.set_position(value, self.visual_preview.y_pct, emit_signal=True)
+        elif axis == 'y':
+            # Invert Y: MIDI 0-100 → GUI 100-0
+            inverted_y = 100.0 - value
+            self.visual_preview.set_position(self.visual_preview.x_pct, inverted_y, emit_signal=True)
+
+    def _setup_midi_context_menu(self):
+        """Add context menu for Visual Preview MIDI Learn"""
         def show_xy_context_menu(pos):
             menu = QMenu()
             learn_x_action = menu.addAction("MIDI Learn X")
