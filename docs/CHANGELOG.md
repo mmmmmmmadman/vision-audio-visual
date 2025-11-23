@@ -2,6 +2,53 @@
 
 ---
 
+## [2025-11-23] 修復 Video File 解析度不匹配問題
+
+### 問題描述
+- **Load Video 後部分功能失效**:
+  - Camera Mix 不顯示影片內容
+  - Contour Detection 無法偵測影片
+  - Region Map 無效
+
+### 問題根源
+- Renderer 在初始化時使用 camera 解析度 (例如 1920x1080)
+- 當載入不同解析度的影片時 (例如 1280x720)，尺寸不匹配
+- 原本的程式碼在尺寸不符時會直接跳過 GPU region 計算
+
+### 修復方案 (`vav/visual/qt_opengl_renderer.py`)
+- **GPU Region 計算**:
+  - 原本: 尺寸不匹配時禁用 GPU region (`use_region_map = 0`)
+  - 修改: 自動 resize `camera_frame` 到 renderer 尺寸後再處理
+
+- **CPU Region 計算**:
+  - 原本: 尺寸不匹配時跳過
+  - 修改: 自動 resize `region_map` (使用 `INTER_NEAREST` 保持離散值)
+
+- **Blend Frame**:
+  - 原本已有 resize 邏輯，新增 debug 輸出確認執行
+
+### Debug 輸出
+- `[Renderer] Resizing camera_frame from ... to ...`: Region map 正在處理
+- `[Renderer] Resizing blend_frame from ... to ...`: Camera mix 正在處理
+
+---
+
+## [2025-11-23] 修復 Video File 播放速度過快
+
+### 問題描述
+- Load Video 後影片播放速度異常快速
+
+### 問題根源
+- `VideoFileSource._read_loop()` 沒有 fps 控制
+- 背景執行緒以最快速度讀取影片幀
+
+### 修復方案 (`vav/vision/camera.py`)
+- 新增 `frame_interval` 計算: `1.0 / fps`
+- 每次讀取前計算已過時間，不足時 `sleep()` 等待
+- 確保影片以原始 fps 播放
+
+---
+
 ## [2025-11-23] Glitch 視覺效果靈敏度調整
 
 ### 參數靈敏度提升

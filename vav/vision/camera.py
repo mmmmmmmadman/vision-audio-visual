@@ -136,10 +136,22 @@ class VideoFileSource:
         return True
 
     def _read_loop(self):
-        """Background thread continuously reads frames"""
+        """Background thread continuously reads frames at video fps"""
+        import time
+        frame_interval = 1.0 / self.fps if self.fps > 0 else 1.0 / 30.0
+        last_frame_time = time.time()
+
         while self.running:
             if self.cap is not None and self.cap.isOpened():
+                # Wait for next frame time
+                current_time = time.time()
+                elapsed = current_time - last_frame_time
+                if elapsed < frame_interval:
+                    time.sleep(frame_interval - elapsed)
+
                 ret, frame = self.cap.read()
+                last_frame_time = time.time()
+
                 if ret:
                     with self.frame_lock:
                         self.frame = frame
@@ -148,15 +160,12 @@ class VideoFileSource:
                     if self.loop:
                         # Reset to beginning
                         self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                        # Small delay to avoid tight loop
-                        import time
                         time.sleep(0.01)
                     else:
                         # Stop playback
                         self.running = False
             else:
                 # Camera not ready, wait a bit
-                import time
                 time.sleep(0.05)
 
     def read(self) -> Tuple[bool, Optional[np.ndarray]]:

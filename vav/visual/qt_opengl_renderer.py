@@ -1172,6 +1172,10 @@ class QtMultiverseRenderer(QOpenGLWidget):
         if blend_frame is not None and camera_mix > 0.0:
             # Resize blend_frame to match renderer output if needed
             if blend_frame.shape[:2] != (self.render_height, self.render_width):
+                # Debug: log resize operation (once per source change)
+                if not hasattr(self, '_blend_resize_logged'):
+                    self._blend_resize_logged = True
+                    print(f"[Renderer] Resizing blend_frame from {blend_frame.shape[:2]} to ({self.render_height}, {self.render_width})")
                 blend_frame_resized = cv2.resize(blend_frame, (self.render_width, self.render_height))
             else:
                 blend_frame_resized = blend_frame
@@ -1188,19 +1192,28 @@ class QtMultiverseRenderer(QOpenGLWidget):
         # Handle region calculation mode
         if use_gpu_region and camera_frame is not None:
             # GPU region mode: upload camera frame
-            if camera_frame.shape[:2] == (self.render_height, self.render_width):
-                # Convert BGR to RGB for OpenGL
-                self.camera_frame_data = cv2.cvtColor(camera_frame, cv2.COLOR_BGR2RGB).astype(np.uint8)
-                self.use_region_map = 1
-                self.use_gpu_region = 1
-                self.region_map_data = None
+            # Resize camera_frame to match renderer output if needed (same as blend_frame)
+            if camera_frame.shape[:2] != (self.render_height, self.render_width):
+                # Debug: log resize operation
+                if not hasattr(self, '_resize_logged'):
+                    self._resize_logged = True
+                    print(f"[Renderer] Resizing camera_frame from {camera_frame.shape[:2]} to ({self.render_height}, {self.render_width})")
+                camera_frame_resized = cv2.resize(camera_frame, (self.render_width, self.render_height))
             else:
-                # Fallback if size mismatch
-                self.use_region_map = 0
-                self.use_gpu_region = 0
-        elif region_map is not None and region_map.shape == (self.render_height, self.render_width):
+                camera_frame_resized = camera_frame
+            # Convert BGR to RGB for OpenGL
+            self.camera_frame_data = cv2.cvtColor(camera_frame_resized, cv2.COLOR_BGR2RGB).astype(np.uint8)
+            self.use_region_map = 1
+            self.use_gpu_region = 1
+            self.region_map_data = None
+        elif region_map is not None:
             # CPU region mode: use pre-calculated region map
-            self.region_map_data = region_map.astype(np.uint8)
+            # Resize region_map if needed
+            if region_map.shape != (self.render_height, self.render_width):
+                region_map_resized = cv2.resize(region_map, (self.render_width, self.render_height), interpolation=cv2.INTER_NEAREST)
+            else:
+                region_map_resized = region_map
+            self.region_map_data = region_map_resized.astype(np.uint8)
             self.use_region_map = 1
             self.use_gpu_region = 0
             self.camera_frame_data = None
