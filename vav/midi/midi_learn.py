@@ -274,6 +274,7 @@ class MIDILearnManager:
         key = (channel, cc)
         if key in self.mappings:
             param_id = self.mappings[key]
+            print(f"[MIDI] CC{cc} value={value} -> param '{param_id}'")
             if param_id in self.callbacks:
                 # Normalize CC value (0-127) to parameter range
                 normalized = value / 127.0

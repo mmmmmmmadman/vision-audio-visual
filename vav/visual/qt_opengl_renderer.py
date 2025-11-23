@@ -254,8 +254,8 @@ class QtMultiverseRenderer(QOpenGLWidget):
             float direction = (noise > 0.5) ? 1.0 : -1.0;
             float amount = hash(vec2(stripe_id, time_seed + 2.0));
 
-            // Larger displacement for bigger bars
-            float offset = direction * amount * tear_amount * glitch_mix * 0.8;
+            // Larger displacement for bigger bars (2x intensity)
+            float offset = direction * amount * tear_amount * glitch_mix * 1.6;
             return vec2(uv.x + offset, uv.y);
         }
 
@@ -275,11 +275,11 @@ class QtMultiverseRenderer(QOpenGLWidget):
         // TEMPORAL (Seq2): Control time speed (5.0-20.0x)
         float time_speed = 5.0 + temporal * 15.0;
         float jitter_noise = hash(vec2(scanline_id, floor(time * time_speed)));
-        float h_jitter = (jitter_noise - 0.5) * 0.003 * jitter_amount * glitch_mix;
+        float h_jitter = (jitter_noise - 0.5) * 0.006 * jitter_amount * glitch_mix;  // 2x intensity
 
-        // Vertical drift with temporal modulation
+        // Vertical drift with temporal modulation (2x intensity)
         float drift_speed = 2.0 + temporal * 6.0;  // 2.0-8.0x
-        float v_drift = sin(scanline_id * 0.1 + time * drift_speed) * 0.0005 * jitter_amount * glitch_mix;
+        float v_drift = sin(scanline_id * 0.1 + time * drift_speed) * 0.001 * jitter_amount * glitch_mix;
 
         return vec2(uv.x + h_jitter, uv.y + v_drift);
     }
@@ -290,9 +290,9 @@ class QtMultiverseRenderer(QOpenGLWidget):
         float shuffle_speed = env_strength * mod_amount;
         if (shuffle_speed < 0.001 || glitch_mix < 0.001) return uv;
 
-        // TEMPORAL (Seq2): Control time step speed
+        // TEMPORAL (Seq2): Control time step speed (2x intensity)
         float time_multiplier = 1.0 + temporal * 3.0;  // 1.0-4.0x
-        float time_step = floor(time * shuffle_speed * 2.0 * time_multiplier);
+        float time_step = floor(time * shuffle_speed * 4.0 * time_multiplier);
 
         // SPATIAL (Seq1): Control grid size with random aspect ratio for rectangles
         float grid_base = 4.0 + spatial * 8.0;  // 4-12 base
@@ -1129,15 +1129,21 @@ class QtMultiverseRenderer(QOpenGLWidget):
             if self._alien4_debug_counter % 50 == 1:
                 print(f"[Renderer] alien4_params received: {alien4_params}")
 
-            self.glitch_mix = alien4_params.get('mix', 0.0)
-            self.glitch_tear = alien4_params.get('feedback', 0.0)
-            self.glitch_swap_speed = alien4_params.get('speed', 1.0)
-            self.glitch_rgb_split = alien4_params.get('poly', 0.0)
+            # Alien4 parameters - 5x sensitivity for small knob movements
+            raw_mix = alien4_params.get('mix', 0.0)
+            self.glitch_mix = min(1.0, raw_mix * 5.0)
+            self.glitch_tear = min(1.0, alien4_params.get('feedback', 0.0) * 5.0)
+            self.glitch_swap_speed = min(1.0, alien4_params.get('speed', 0.0) * 5.0)
+            self.glitch_rgb_split = min(1.0, alien4_params.get('poly', 0.0) * 5.0)
 
-            # Ripley parameters (delay_mix, grain_mix, reverb_mix)
-            delay_val = alien4_params.get('delay_mix', 0.5)
-            grain_val = alien4_params.get('grain_mix', 0.5)
-            reverb_val = alien4_params.get('reverb_mix', 0.0)
+            # Debug: show when glitch is active
+            if self.glitch_mix > 0.01:
+                print(f"[GLITCH ACTIVE] mix={self.glitch_mix:.3f} tear={self.glitch_tear:.3f} speed={self.glitch_swap_speed:.3f} poly={self.glitch_rgb_split:.3f}")
+
+            # Ripley parameters (delay_mix, grain_mix, reverb_mix) - 5x sensitivity
+            delay_val = min(1.0, alien4_params.get('delay_mix', 0.0) * 5.0)
+            grain_val = min(1.0, alien4_params.get('grain_mix', 0.0) * 5.0)
+            reverb_val = min(1.0, alien4_params.get('reverb_mix', 0.0) * 5.0)
 
             # Map to region controls
             # delay_mix: reserved for future use

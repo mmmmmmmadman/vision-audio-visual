@@ -2,6 +2,39 @@
 
 ---
 
+## [2025-11-23] Glitch 視覺效果靈敏度調整
+
+### 參數靈敏度提升
+- **Alien4 參數 5 倍靈敏度**:
+  - mix, feedback, speed, poly 參數放大 5 倍
+  - 旋鈕轉動 20% 即可達到滿效果
+  - 使用 `min(1.0, value * 5.0)` 限制在 0-1 範圍
+
+- **Ellen Ripley 參數 5 倍靈敏度**:
+  - delay_mix, grain_mix, reverb_mix 參數放大 5 倍
+  - 同樣使用 `min(1.0, value * 5.0)` 限制範圍
+
+### Shader Glitch 效果強度調整
+- **Region Tear (水平撕裂)**:
+  - 位移量從 0.8 調整為 1.6 (2 倍)
+
+- **Scanline Jitter (掃描線抖動)**:
+  - 水平抖動從 0.003 調整為 0.006 (2 倍)
+  - 垂直飄移從 0.0005 調整為 0.001 (2 倍)
+
+- **Block Shuffle (區塊交換)**:
+  - 交換速度從 2.0 調整為 4.0 (2 倍)
+
+### 除錯輸出
+- 新增 `[GLITCH ACTIVE]` 訊息，當 glitch_mix > 0.01 時顯示所有參數值
+- 新增 `[MIDI] CCxx` 訊息，追蹤 MIDI CC 訊號接收
+
+### 修改檔案
+- `vav/visual/qt_opengl_renderer.py`: 參數靈敏度、shader 強度
+- `vav/midi/midi_learn.py`: MIDI debug 輸出
+
+---
+
 ## [2025-11-21] 影片檔案載入功能與解析度切換修復
 
 ### 影片載入功能
