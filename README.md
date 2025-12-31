@@ -127,6 +127,12 @@ python3 main_compact.py
 
 ---
 
+## Demo
+
+Live performance in Osaka: https://youtu.be/C0OXfQM1N-o
+
+---
+
 ## License
 
 MIT License - MADZINE 2025
