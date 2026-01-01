@@ -16,7 +16,8 @@ python3 main_compact.py
 ```
 
 ### Requirements
-- macOS 12+ / Python 3.11+
+- macOS 12+ only (Windows not supported)
+- Python 3.11+
 - DC-coupled output audio interface (for CV output)
 - Webcam or video file
 
@@ -57,7 +58,8 @@ python3 main_compact.py
 ```
 
 ### 需求
-- macOS 12+ / Python 3.11+
+- 僅支援 macOS 12+（不支援 Windows）
+- Python 3.11+
 - DC-coupled 輸出音訊介面（用於 CV 輸出）
 - 攝影機或影片檔案
 
@@ -98,7 +100,8 @@ python3 main_compact.py
 ```
 
 ### 必要環境
-- macOS 12+ / Python 3.11+
+- macOS 12+ のみ（Windows 非対応）
+- Python 3.11+
 - DC-coupled 出力対応オーディオインターフェース（CV 出力用）
 - ウェブカメラまたは動画ファイル
 
